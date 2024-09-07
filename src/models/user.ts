@@ -1,40 +1,42 @@
-import mongoose from 'mongoose';
-import bcrypt from 'bcrypt';
+/**
+ * v0 by Vercel.
+ * @see https://v0.dev/t/p2DRmqnsGKJ
+ * Documentation: https://v0.dev/docs#integrating-generated-code-into-your-nextjs-app
+ */
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 
-const UserSchema = new mongoose.Schema({
-  usertype: {
-    type: String,
-    required: [true, 'Please specify user type'],
-    enum: ['tutor', 'advertiser', 'parent', 'student']
-  },
-  name: {
-    type: String,
-    required: [true, 'Please provide a name']
-  },
-  phone: {
-    type: String,
-    required: [true, 'Please provide a phone number']
-  },
-  email: {
-    type: String,
-    required: [true, 'Please provide an email'],
-    unique: true
-  },
-  password: {
-    type: String,
-    required: [true, 'Please provide a password']
-  }
-});
-
-UserSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
-});
-
-UserSchema.methods.comparePassword = async function(candidatePassword: string) {
-  return bcrypt.compare(candidatePassword, this.password);
-};
-
-export default mongoose.models.User || mongoose.model('User', UserSchema);
+export default function Component() {
+  return (
+    <div className="mx-auto max-w-sm space-y-6">
+      <div className="space-y-2 text-center">
+        <h1 className="text-3xl font-bold">Sign Up</h1>
+        <p className="text-muted-foreground">Enter your information to create an account</p>
+      </div>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="firstName">First Name</Label>
+            <Input id="firstName" placeholder="Lee" required />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="lastName">Last Name</Label>
+            <Input id="lastName" placeholder="Robinson" required />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input id="email" type="email" placeholder="m@example.com" required />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="password">Password</Label>
+          <Input id="password" type="password" required />
+        </div>
+        <Button type="submit" className="w-full">
+          Sign Up
+        </Button>
+      </div>
+    </div>
+  )
+}
