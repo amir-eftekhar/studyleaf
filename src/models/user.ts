@@ -1,42 +1,19 @@
-/**
- * v0 by Vercel.
- * @see https://v0.dev/t/p2DRmqnsGKJ
- * Documentation: https://v0.dev/docs#integrating-generated-code-into-your-nextjs-app
- */
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
+import mongoose, { Document, Schema } from 'mongoose';
 
-export default function Component() {
-  return (
-    <div className="mx-auto max-w-sm space-y-6">
-      <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">Sign Up</h1>
-        <p className="text-muted-foreground">Enter your information to create an account</p>
-      </div>
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="firstName">First Name</Label>
-            <Input id="firstName" placeholder="Lee" required />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="lastName">Last Name</Label>
-            <Input id="lastName" placeholder="Robinson" required />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <Input id="email" type="email" placeholder="m@example.com" required />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
-          <Input id="password" type="password" required />
-        </div>
-        <Button type="submit" className="w-full">
-          Sign Up
-        </Button>
-      </div>
-    </div>
-  )
+export interface IUser extends Document {
+  name: string;
+  phone: string;
+  email: string;
+  password: string;
 }
+
+const UserSchema: Schema = new Schema({
+  name: { type: String, required: true },
+  phone: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+});
+
+const User = mongoose.models.User || mongoose.model<IUser>('User', UserSchema);
+
+export default User;
