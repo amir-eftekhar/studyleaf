@@ -59,7 +59,7 @@ export default function HomePage() {
             <nav className="p-4">
               <ul className="space-y-2">
                 <SidebarItem icon={<FiBook />} text="Study" href="#" />
-                <SidebarItem icon={<FiFolder />} text="Library" href="#" />
+                <SidebarItem icon={<FiFolder />} text="Library" href="/library" />
                 <SidebarItem icon={<FiUsers />} text="Classes" href="#" />
                 <SidebarItem icon={<FiSettings />} text="Settings" href="#" />
               </ul>
