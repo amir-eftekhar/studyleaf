@@ -1,35 +1,45 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import textToSpeech from '@google-cloud/text-to-speech';
+import { GoogleAuth } from 'google-auth-library';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+const client = new textToSpeech.TextToSpeechClient({
+  auth: new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform']
+  })
 });
 
 export async function POST(request: Request) {
-  const { text } = await request.json();
+  const { text, voice = 'en-US-Neural2-A', languageCode = 'en-US' } = await request.json();
 
   if (!text) {
     return NextResponse.json({ error: 'Text is required' }, { status: 400 });
   }
 
   try {
-    const mp3 = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: "alloy",
-      input: text,
+    const [response] = await client.synthesizeSpeech({
+      input: { text },
+      voice: { languageCode, name: voice },
+      audioConfig: { audioEncoding: 'MP3' },
     });
 
-    const buffer = Buffer.from(await mp3.arrayBuffer());
+    const audioContent = response.audioContent;
 
-    return new NextResponse(buffer, {
+    if (!audioContent) {
+      throw new Error('Failed to generate audio content');
+    }
+
+    // Convert audioContent (which is a Uint8Array) to a Buffer
+    const audioBuffer = Buffer.from(audioContent);
+
+    return new NextResponse(audioBuffer, {
       status: 200,
       headers: {
         'Content-Type': 'audio/mpeg',
-        'Content-Length': buffer.length.toString()
-      }
+        'Content-Length': audioBuffer.length.toString(),
+      },
     });
   } catch (error) {
-    console.error('Error generating speech:', error);
+    console.error('Error in TTS process:', error);
     return NextResponse.json({ error: 'Failed to generate speech' }, { status: 500 });
   }
 }
