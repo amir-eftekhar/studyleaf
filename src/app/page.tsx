@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { FiBook, FiHeadphones, FiFileText, FiLock, FiChrome, FiAward } from 'react-icons/fi'
 import Link from 'next/link'
-
+import logoSrc from './img/logo.svg'
+import Image from 'next/image'
 
 export default function LandingPage() {
   const [isScrolled, setIsScrolled] = useState(false)
@@ -26,8 +27,9 @@ export default function LandingPage() {
       >
         <div className="container mx-auto px-4">
           <nav className="flex items-center justify-between">
-            <Link href="/" className="text-2xl font-bold text-indigo-600">
-              EduPlatform
+            <Link href="/" className="flex items-center text-2xl font-bold text-indigo-600">
+              <Image src={logoSrc} alt="StudyLeaf Logo" width={64} height={64} className="mr-0" />
+              <span>StudyLeaf</span>
             </Link>
             <ul className="hidden md:flex space-x-8">
               <li>
@@ -89,7 +91,7 @@ export default function LandingPage() {
               transition={{ duration: 0.8, delay: 0.4 }}
             >
               <Link
-                href="/signup"
+                href="/auth?auth=signup"
                 className="px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-full text-lg font-semibold hover:from-indigo-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl"
               >
                 Get Started for Free
@@ -167,11 +169,11 @@ export default function LandingPage() {
                   "Ad-supported",
                 ]}
                 ctaText="Get Started"
-                ctaLink="/signup"
+                ctaLink="/auth?auth=signup"
               />
               <PricingCard
                 title="Pro"
-                price="$9.99"
+                price="$4.99"
                 period="month"
                 features={[
                   "Advanced note-taking with AI",
@@ -181,12 +183,12 @@ export default function LandingPage() {
                   "Priority support",
                 ]}
                 ctaText="Upgrade to Pro"
-                ctaLink="/upgrade"
+                ctaLink="/auth?auth=signup"
                 highlighted={true}
               />
               <PricingCard
                 title="Team"
-                price="$29.99"
+                price="$9.99"
                 period="month"
                 features={[
                   "All Pro features",
@@ -195,8 +197,8 @@ export default function LandingPage() {
                   "Admin controls",
                   "API access",
                 ]}
-                ctaText="Contact Sales"
-                ctaLink="/contact"
+                ctaText="Continue"
+                ctaLink="/auth?auth=signup"
               />
             </div>
           </div>
@@ -220,7 +222,7 @@ export default function LandingPage() {
         <div className="container mx-auto px-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
             <div>
-              <h3 className="text-2xl font-bold mb-4">EduPlatform</h3>
+              <h3 className="text-2xl font-bold mb-4">StudyLeaf</h3>
               <p className="text-gray-400">Empowering students with AI-driven learning tools.</p>
             </div>
             <div>
@@ -242,14 +244,14 @@ export default function LandingPage() {
             <div>
               <h4 className="text-lg font-semibold mb-4">Connect</h4>
               <ul className="space-y-2">
-                <li><Link href="https://twitter.com/eduplatform" className="text-gray-400 hover:text-white">Twitter</Link></li>
-                <li><Link href="https://facebook.com/eduplatform" className="text-gray-400 hover:text-white">Facebook</Link></li>
-                <li><Link href="https://linkedin.com/company/eduplatform" className="text-gray-400 hover:text-white">LinkedIn</Link></li>
+                <li><Link href="https://twitter.com/StudyLeaf" className="text-gray-400 hover:text-white">Twitter</Link></li>
+                <li><Link href="https://facebook.com/StudyLeaf" className="text-gray-400 hover:text-white">Facebook</Link></li>
+                <li><Link href="https://linkedin.com/company/StudyLeaf" className="text-gray-400 hover:text-white">LinkedIn</Link></li>
               </ul>
             </div>
           </div>
           <div className="mt-8 pt-8 border-t border-gray-700 text-center text-gray-400">
-            <p>&copy; {new Date().getFullYear()} EduPlatform. All rights reserved.</p>
+            <p>&copy; {new Date().getFullYear()} StudyLeaf. All rights reserved.</p>
           </div>
         </div>
       </footer>

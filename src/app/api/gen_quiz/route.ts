@@ -1,32 +1,43 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { setupVectorSearch, getDocumentSections } from '@/lib/vectorDb';
+import { setupVectorSearch, getDocumentContent } from '@/lib/vectorDb';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 interface QuizQuestion {
-  type: 'multiple_choice' | 'free_response';
+  type: 'multiple_choice' | 'free_response' | 'true_false';
   question: string;
   choices?: { text: string; correct: boolean }[];
   answer?: string;
+  subject: string;
+  reference: string;
 }
 
 interface QuizConfig {
-  numQuestions: number;
+  numQuestions: {
+    multiple_choice: number;
+    free_response: number;
+    true_false: number;
+  };
   difficulty: 'easy' | 'medium' | 'hard';
-  types: ('multiple_choice' | 'free_response')[];
   adaptive: boolean;
 }
 
 async function generateQuiz(content: string, config: QuizConfig): Promise<QuizQuestion[]> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
   
-  const prompt = `Generate a quiz based on the following content. The quiz should have ${config.numQuestions} questions, with a difficulty level of ${config.difficulty}. Include a mix of ${config.types.join(' and ')} questions.
+  const prompt = `Generate a quiz based on the following content. The quiz should have:
+- ${config.numQuestions.multiple_choice} multiple-choice questions
+- ${config.numQuestions.free_response} free-response questions
+- ${config.numQuestions.true_false} true/false questions
+The overall difficulty level should be ${config.difficulty}.
 
 Content:
 ${content}
 
-For multiple-choice questions, provide 4 options and mark the correct answer. For free-response questions, provide a sample answer for evaluation.
+For each question, also provide:
+1. The subject or topic it relates to
+2. A reference to the specific part of the content it's based on
 
 Generate the quiz in the following JSON format:
 [
@@ -38,114 +49,71 @@ Generate the quiz in the following JSON format:
       { "text": "Option B", "correct": true },
       { "text": "Option C", "correct": false },
       { "text": "Option D", "correct": false }
-    ]
+    ],
+    "subject": "Subject or topic",
+    "reference": "Relevant excerpt or page reference"
   },
   {
     "type": "free_response",
     "question": "Question text",
-    "answer": "Sample answer for evaluation"
+    "answer": "Sample answer for evaluation",
+    "subject": "Subject or topic",
+    "reference": "Relevant excerpt or page reference"
+  },
+  {
+    "type": "true_false",
+    "question": "Statement to evaluate",
+    "answer": true,
+    "subject": "Subject or topic",
+    "reference": "Relevant excerpt or page reference"
   }
-]`;
+]
+
+Important: Return only the JSON array, without any markdown formatting or additional text.`;
 
   const result = await model.generateContent(prompt);
   const quizJson = result.response.text();
-  return JSON.parse(quizJson);
-}
-
-async function checkFreeResponse(question: string, userAnswer: string, sampleAnswer: string): Promise<string> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
   
-  const prompt = `Evaluate the user's answer to the following question:
-
-Question: ${question}
-
-User's Answer: ${userAnswer}
-
-Sample Answer: ${sampleAnswer}
-
-Provide feedback on the user's answer, highlighting strengths and areas for improvement. Be constructive and encouraging in your feedback.`;
-
-  const result = await model.generateContent(prompt);
-  return result.response.text();
-}
-
-async function generateAdaptiveQuestion(previousQuestions: QuizQuestion[], userAnswers: string[], config: QuizConfig): Promise<QuizQuestion> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+  // Remove any markdown formatting if present
+  const cleanJson = quizJson.replace(/```json\n|\n```/g, '').trim();
   
-  const prompt = `Based on the following previous questions and user answers, generate a new adaptive question:
-
-Previous Questions and Answers:
-${previousQuestions.map((q, i) => `Q: ${q.question}\nA: ${userAnswers[i]}`).join('\n\n')}
-
-Generate a new ${config.types[Math.floor(Math.random() * config.types.length)]} question that adapts to the user's performance and knowledge level.
-
-Use the same JSON format as before for the new question.`;
-
-  const result = await model.generateContent(prompt);
-  const questionJson = result.response.text();
-  return JSON.parse(questionJson);
+  try {
+    return JSON.parse(cleanJson);
+  } catch (error) {
+    console.error('Error parsing quiz JSON:', error);
+    console.error('Raw quiz JSON:', cleanJson);
+    throw new Error('Failed to parse quiz JSON');
+  }
 }
 
 export async function POST(request: Request) {
-  const { documentId, quizConfig } = await request.json();
-
-  if (!documentId || !quizConfig) {
-    return NextResponse.json({ error: 'Document ID and quiz configuration are required' }, { status: 400 });
-  }
-
+  console.log('Received POST request to /api/gen_quiz');
   try {
-    await setupVectorSearch();
+    const { documentId, quizConfig } = await request.json();
+    console.log('Request payload:', { documentId, quizConfig });
 
-    const sections = await getDocumentSections(documentId);
-    const content = sections.join('\n\n');
+    if (!documentId || !quizConfig) {
+      console.log('Missing required fields');
+      return NextResponse.json({ error: 'Document ID and quiz configuration are required' }, { status: 400 });
+    }
 
+    console.log('Setting up vector search');
+    await setupVectorSearch(documentId);
+
+    console.log('Retrieving document content');
+    const content = await getDocumentContent(documentId);
+    if (!content) {
+      console.log('Failed to retrieve document content');
+      return NextResponse.json({ error: 'Failed to retrieve document content' }, { status: 500 });
+    }
+
+    console.log('Generating quiz');
     const quiz = await generateQuiz(content, quizConfig);
 
+    console.log('Quiz generated successfully');
     return NextResponse.json({ quiz });
   } catch (error) {
-    console.error('Error generating quiz:', error);
-    return NextResponse.json({ error: 'Failed to generate quiz' }, { status: 500 });
-  }
-}
-
-export async function PUT(request: Request) {
-  const { question, userAnswer } = await request.json();
-
-  if (!question || !userAnswer) {
-    return NextResponse.json({ error: 'Question and user answer are required' }, { status: 400 });
-  }
-
-  try {
-    if (question.type === 'multiple_choice') {
-      const correctChoice = question.choices?.find((choice: { text: string; correct: boolean }) => choice.correct);
-      if (correctChoice) {
-        const isCorrect = userAnswer === correctChoice.text;
-        return NextResponse.json({ correct: isCorrect, feedback: isCorrect ? 'Correct!' : 'Incorrect. The correct answer is: ' + correctChoice.text });
-      } else {
-        return NextResponse.json({ error: 'Invalid question format' }, { status: 400 });
-      }
-    } else {
-      const feedback = await checkFreeResponse(question.question, userAnswer, question.answer || '');
-      return NextResponse.json({ feedback });
-    }
-  } catch (error) {
-    console.error('Error checking answer:', error);
-    return NextResponse.json({ error: 'Failed to check answer' }, { status: 500 });
-  }
-}
-
-export async function PATCH(request: Request) {
-  const { previousQuestions, userAnswers, quizConfig } = await request.json();
-
-  if (!previousQuestions || !userAnswers || !quizConfig) {
-    return NextResponse.json({ error: 'Previous questions, user answers, and quiz configuration are required' }, { status: 400 });
-  }
-
-  try {
-    const newQuestion = await generateAdaptiveQuestion(previousQuestions, userAnswers, quizConfig);
-    return NextResponse.json({ question: newQuestion });
-  } catch (error) {
-    console.error('Error generating adaptive question:', error);
-    return NextResponse.json({ error: 'Failed to generate adaptive question' }, { status: 500 });
+    console.error('Error in gen_quiz POST route:', error);
+    return NextResponse.json({ error: 'Failed to generate quiz', details: (error as Error).message }, { status: 500 });
   }
 }

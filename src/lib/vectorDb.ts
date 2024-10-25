@@ -1,7 +1,15 @@
 import { MongoClient, ObjectId } from 'mongodb';
+import axios from 'axios';
+import * as pdfjsLib from 'pdfjs-dist';
+import path from 'path';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = path.resolve(process.cwd(), 'node_modules/pdfjs-dist/build/pdf.worker.min.js');
 
 const uri = process.env.MONGODB_URI!;
 const client = new MongoClient(uri);
+
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 interface EmbeddingDocument {
   _id: ObjectId;
@@ -42,35 +50,81 @@ interface LectureNote extends Note {
   audioFilename: string;
 }
 
-export async function setupVectorSearch() {
+async function generateEmbedding(text: string) {
+  console.log('Generating embedding for:', text.substring(0, 50) + '...');
+  const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
+  const result = await embeddingModel.embedContent(text);
+  const embedding = result.embedding;
+  console.log('Embedding generated, length:', embedding.values.length);
+  return embedding.values;
+}
+
+export async function setupVectorSearch(documentId: string) {
+  console.log('Setting up vector search for document:', documentId);
   try {
     await client.connect();
-    console.log('Connected to MongoDB Atlas');
-    
     const db = client.db('pdf_database');
     const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
 
-    // Create vector index
-    await embeddingsCollection.createIndex(
-      { embedding: 1 } as any,
-      {
-        name: "vector_index",
-        vectorSearchOptions: {
-          numDimensions: 768, // Adjust based on your embedding model
-          similarity: "cosine"
-        }
-      } as any
-    );
-    console.log('Vector index created successfully');
+    // Check if embeddings already exist for this document
+    const existingEmbeddings = await embeddingsCollection.findOne({ "metadata.documentId": documentId });
+    if (existingEmbeddings) {
+      console.log('Embeddings already exist for this document');
+      return;
+    }
 
-    // Create text index
-    await embeddingsCollection.createIndex(
-      { content: "text" },
-      { name: "text_index" }
+    // Construct the full URL
+    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+    const fullUrl = new URL(documentId, baseUrl).toString();
+    console.log('Fetching PDF from URL:', fullUrl);
+
+    // Fetch the PDF content
+    const response = await axios.get(fullUrl, { responseType: 'arraybuffer' });
+    const pdfData = new Uint8Array(response.data);
+    console.log('PDF data fetched, length:', pdfData.length);
+
+    // Load the PDF document
+    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+    const numPages = pdf.numPages;
+    console.log('PDF loaded, number of pages:', numPages);
+
+    let fullText = '';
+
+    // Extract text from each page and create embeddings
+    for (let i = 1; i <= numPages; i++) {
+      console.log(`Processing page ${i} of ${numPages}`);
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      fullText += pageText + ' ';
+
+      // Generate embedding for pageText
+      const embedding = await generateEmbedding(pageText);
+
+      await embeddingsCollection.insertOne({
+        content: pageText,
+        embedding: embedding,
+        metadata: {
+          pageNumber: i,
+          documentId,
+          fileType: 'pdf',
+          createdAt: new Date()
+        },
+        _id: new ObjectId()
+      });
+    }
+
+    // Store the full text of the document
+    const documentsCollection = db.collection('documents');
+    await documentsCollection.updateOne(
+      { documentId },
+      { $set: { fullText, createdAt: new Date() } },
+      { upsert: true }
     );
-    console.log('Text index created successfully');
+
+    console.log('Vector search setup completed for document:', documentId);
   } catch (error) {
-    console.error('Error setting up database:', error);
+    console.error('Error in setupVectorSearch:', error);
     throw error;
   }
 }
@@ -98,28 +152,41 @@ export async function vectorSearch(queryEmbedding: number[], limit: number = 5, 
   const db = client.db('pdf_database');
   const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
 
-  const filter = documentId ? { "metadata.documentId": documentId } : {};
+  let pipeline = [];
 
-  const results = await embeddingsCollection.aggregate([
-    { $match: filter },
-    {
-      $vectorSearch: {
-        index: "vector_index",
-        path: "embedding",
-        queryVector: queryEmbedding,
-        numCandidates: 100,
-        limit: limit
-      }
-    },
-    {
-      $project: {
-        content: 1,
-        metadata: 1,
-        score: { $meta: "vectorSearchScore" }
+  if (documentId) {
+    pipeline.push({ $match: { "metadata.documentId": documentId } });
+  }
+
+  pipeline.push({
+    $addFields: {
+      similarity: {
+        $reduce: {
+          input: { $range: [0, { $size: "$embedding" }] },
+          initialValue: 0,
+          in: {
+            $add: [
+              "$$value",
+              { $multiply: [{ $arrayElemAt: ["$embedding", "$$this"] }, { $arrayElemAt: [queryEmbedding, "$$this"] }] }
+            ]
+          }
+        }
       }
     }
-  ]).toArray();
+  });
 
+  pipeline.push({ $sort: { similarity: -1 } });
+  pipeline.push({ $limit: limit });
+
+  pipeline.push({
+    $project: {
+      content: 1,
+      metadata: 1,
+      score: "$similarity"
+    }
+  });
+
+  const results = await embeddingsCollection.aggregate(pipeline).toArray();
   return results;
 }
 
@@ -156,20 +223,20 @@ export async function getSystemPrompt(documentId: string): Promise<string | null
   return result ? result.prompt : null;
 }
 
-export async function getDocumentSections(documentId: string): Promise<string[]> {
+export async function getDocumentContent(documentId: string): Promise<string | null> {
   const db = client.db('pdf_database');
-  const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
+  const documentsCollection = db.collection('documents');
 
-  const results = await embeddingsCollection.find(
-    { "metadata.documentId": documentId },
-    { projection: { content: 1 } }
-  ).toArray();
-
-  return results.map(doc => doc.content);
+  const document = await documentsCollection.findOne({ documentId });
+  return document ? document.fullText : null;
 }
 
 export async function closeConnection() {
-  await client.close();
+  try {
+    await client.close();
+  } catch (error) {
+    console.error('Error closing MongoDB connection:', error);
+  }
 }
 
 export async function storeNote(note: Omit<Note, '_id' | 'createdAt' | 'updatedAt'>) {

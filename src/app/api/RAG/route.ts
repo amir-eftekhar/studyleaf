@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { setupVectorSearch, insertEmbedding, vectorSearch, wordSearch, closeConnection, getSystemPrompt } from '@/lib/vectorDb';
+import { setupVectorSearch, insertEmbedding, vectorSearch, wordSearch, closeConnection, getSystemPrompt, getDocumentContent } from '@/lib/vectorDb';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
@@ -51,7 +51,7 @@ async function generateAnswer(context: string, question: string, systemPrompt: s
     ],
   });
 
-  const result = await chat.sendMessage(`Context: ${context}\n\nQuestion: ${question}`);
+  const result = await chat.sendMessage(`Context: ${context}\n\nQuestion: ${question}\n\nPlease provide a detailed answer. Use markdown formatting for emphasis, lists, and structure. Use LaTeX for mathematical expressions when appropriate.`);
   console.log('Answer generated');
   return result.response.text();
 }
@@ -80,24 +80,26 @@ function splitIntoSections(text: string, maxLength: number = 1000): string[] {
 
 export async function POST(request: Request) {
   console.log('Received POST request to /api/RAG');
-  const { question, content, documentId, fileType } = await request.json();
-
-  if (!question || !content || !documentId || !fileType) {
-    console.error('Missing required fields');
-    return NextResponse.json({ error: 'Question, content, document ID, and file type are required' }, { status: 400 });
-  }
-
   try {
+    const { question, documentId, fileType } = await request.json();
+
+    if (!question || !documentId || !fileType) {
+      console.error('Missing required fields');
+      return NextResponse.json({ error: 'Question, document ID, and file type are required' }, { status: 400 });
+    }
+
     console.log('Setting up vector search');
-    await setupVectorSearch();
+    try {
+      await setupVectorSearch(documentId);
+    } catch (error) {
+      console.error('Error setting up vector search:', error);
+      // Continue with the process even if setup fails
+    }
 
-    console.log('Splitting content into sections');
-    const sections = splitIntoSections(content);
-
-    console.log('Generating embeddings for sections');
-    for (let i = 0; i < sections.length; i++) {
-      const embedding = await generateEmbedding(sections[i]);
-      await insertEmbedding(sections[i], embedding, { pageNumber: i + 1, documentId, fileType });
+    console.log('Retrieving document content');
+    const documentContent = await getDocumentContent(documentId);
+    if (!documentContent) {
+      return NextResponse.json({ error: 'Failed to retrieve document content' }, { status: 500 });
     }
 
     console.log('Generating embedding for question');
@@ -112,8 +114,7 @@ export async function POST(request: Request) {
     console.log('Combining and deduplicating results');
     const combinedResults = [...similarDocs, ...wordSearchResults];
     const uniqueResults = Array.from(new Set(combinedResults.map(doc => doc.content)))
-      .map(content => combinedResults.find(doc => doc.content === content))
-      .filter((doc): doc is NonNullable<typeof doc> => doc !== undefined);
+      .map(content => ({ content }));
 
     console.log('Sorting results');
     uniqueResults.sort((a, b) => ((b as any).score || 0) - ((a as any).score || 0));
@@ -121,18 +122,22 @@ export async function POST(request: Request) {
     const relevantContent = uniqueResults.map(doc => doc.content).join('\n\n');
 
     console.log('Retrieving system prompt');
-    const systemPrompt = await getSystemPrompt(documentId) || "You are a helpful assistant that answers questions based on the provided context.";
+    const systemPrompt = await getSystemPrompt(documentId) || "You are a helpful assistant that answers questions based on the provided context. Use LaTeX for mathematical expressions when appropriate.";
 
     console.log('Generating final answer');
     const answer = await generateAnswer(relevantContent, question, systemPrompt);
 
     console.log('Returning response');
-    return NextResponse.json({ answer });
+    return NextResponse.json({ answer, documentContent });
   } catch (error) {
     console.error('Error in RAG process:', error);
     return NextResponse.json({ error: 'Failed to process the question', details: (error as Error).message }, { status: 500 });
   } finally {
     console.log('Closing database connection');
-    await closeConnection();
+    try {
+      await closeConnection();
+    } catch (error) {
+      console.error('Error closing database connection:', error);
+    }
   }
 }

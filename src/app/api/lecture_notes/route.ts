@@ -1,84 +1,73 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { storeNote, updateStreamNote, getLatestStreamNote } from '@/lib/vectorDb';
-import fs from 'fs';
+import { writeFile, mkdir, readFile, unlink } from 'fs/promises';
 import path from 'path';
-import os from 'os';
+import { v4 as uuidv4 } from 'uuid';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
-type NoteStyle = 'cornell' | 'bullet' | 'outline' | 'summary';
-
-interface NoteConfig {
-  style: NoteStyle;
-  focus?: string;
-}
-
-const stylePrompts: Record<NoteStyle, string> = {
-  cornell: "Generate Cornell-style notes with a main notes section, cue column, and summary.",
-  bullet: "Create concise bullet-point notes highlighting key information.",
-  outline: "Produce an outline-style set of notes with main topics and subtopics.",
-  summary: "Write a comprehensive summary of the main points and key details.",
-};
-
-async function generateNotes(content: string, config: NoteConfig, previousNotes: string = ''): Promise<string> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-  
-  const focusPrompt = config.focus ? `Focus on the topic of ${config.focus}.` : "Cover all important information.";
-  const prompt = `${stylePrompts[config.style]} ${focusPrompt}
-
-Content:
-${content}
-
-${previousNotes ? `Previous Notes:\n${previousNotes}\n\n` : ''}
-Generate notes:`;
-
-  const result = await model.generateContent(prompt);
-  return result.response.text();
-}
-
 export async function POST(request: Request) {
-  const { lectureId, text, config } = await request.json();
-
-  if (!lectureId || !text || !config) {
-    return NextResponse.json({ error: 'Lecture ID, text, and configuration are required' }, { status: 400 });
-  }
-
   try {
-    const latestNote = await getLatestStreamNote(lectureId);
-    const previousNotes = latestNote ? latestNote.content : '';
-    const previousContent = latestNote ? latestNote.previousContent : '';
+    const formData = await request.formData();
+    const audioFile = formData.get('audio') as File;
 
-    const newNotes = await generateNotes(text, config, previousNotes);
-    const updatedNotes = previousNotes + '\n\n' + newNotes;
+    if (!audioFile) {
+      return NextResponse.json({ error: 'No audio file provided' }, { status: 400 });
+    }
 
-    await updateStreamNote(lectureId, updatedNotes, previousContent + text, (latestNote?.streamPosition || 0) + 1);
+    // Create tmp directory if it doesn't exist
+    const tmpDir = path.join(process.cwd(), 'tmp');
+    await mkdir(tmpDir, { recursive: true });
 
-    // Save audio (assuming text is base64 encoded audio)
-    const audioBuffer = Buffer.from(text, 'base64');
-    const audioFilename = path.join(os.tmpdir(), `lecture_${lectureId}_${Date.now()}.wav`);
-    await fs.promises.writeFile(audioFilename, audioBuffer);
+    // Save the file temporarily
+    const buffer = Buffer.from(await audioFile.arrayBuffer());
+    const filename = `${uuidv4()}.${audioFile.name.split('.').pop()}`;
+    const filepath = path.join(tmpDir, filename);
+    
+    try {
+      await writeFile(filepath, buffer);
+    } catch (writeError) {
+      console.error('Error writing file:', writeError);
+      return NextResponse.json({ error: 'Failed to save audio file' }, { status: 500 });
+    }
 
-    return NextResponse.json({ notes: newNotes, audioFilename });
+    // Read the audio file content
+    const audioContent = await readFile(filepath, { encoding: 'base64' });
+
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+    const prompt = `You are an AI assistant capable of understanding audio content. 
+    The following is a base64 encoded audio file of a lecture. 
+    Please analyze it and generate concise lecture notes in the following formats:
+    1. Summary (short paragraph form)
+    2. Bullet points (key points only)
+    3. Cornell notes (main notes, cues, and summary)
+
+    Audio content (base64 encoded):
+    ${audioContent}
+
+    Please format the response as a JSON object with the following structure:
+    {
+      "summary": "...",
+      "bullet_points": ["...", "...", "..."],
+      "cornell": {
+        "notes": ["...", "...", "..."],
+        "cues": ["...", "...", "..."],
+        "summary": "..."
+      }
+    }
+
+    Keep the notes brief and focused on the main points.`;
+
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const notes = JSON.parse(response.text());
+
+    // Clean up the temporary file
+    await unlink(filepath);
+
+    return NextResponse.json({ notes });
   } catch (error) {
-    console.error('Error generating lecture notes:', error);
-    return NextResponse.json({ error: 'Failed to generate lecture notes' }, { status: 500 });
-  }
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const lectureId = searchParams.get('lectureId');
-
-  if (!lectureId) {
-    return NextResponse.json({ error: 'Lecture ID is required' }, { status: 400 });
-  }
-
-  try {
-    const latestNote = await getLatestStreamNote(lectureId);
-    return NextResponse.json({ notes: latestNote?.content || '' });
-  } catch (error) {
-    console.error('Error retrieving lecture notes:', error);
-    return NextResponse.json({ error: 'Failed to retrieve lecture notes' }, { status: 500 });
+    console.error('Error in lecture_notes API:', error);
+    return NextResponse.json({ error: 'Failed to generate notes' }, { status: 500 });
   }
 }

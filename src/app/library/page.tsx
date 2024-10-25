@@ -1,42 +1,68 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { FiSearch, FiPlus, FiBook, FiFolder, FiUsers, FiBell, FiMenu, FiX, FiUpload, FiSettings, FiFile, FiTrash2 } from 'react-icons/fi'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import axios from 'axios'
+
 type Document = {
   id: string
   name: string
   type: string
   size: number
   lastModified: Date
+  url: string
 }
 
 export default function LibraryPage() {
-const router = useRouter()
+  const router = useRouter()
   const [searchQuery, setSearchQuery] = useState('')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [documents, setDocuments] = useState<Document[]>([])
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const toggleSidebar = () => {
     setIsSidebarOpen(!isSidebarOpen)
   }
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newDocuments = Array.from(event.target.files || []).map(file => ({
-      id: Math.random().toString(36).substr(2, 9),
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      lastModified: new Date(file.lastModified)
-    }))
-    setDocuments([...documents, ...newDocuments])
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files
+    if (files) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        const formData = new FormData()
+        formData.append('file', file)
+
+        try {
+          const response = await axios.post('/api/upload_pdf', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+          })
+
+          const newDocument: Document = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: new Date(file.lastModified),
+            url: response.data.url,
+          }
+
+          setDocuments(prevDocuments => [...prevDocuments, newDocument])
+        } catch (error) {
+          console.error('Error uploading file:', error)
+          // Handle error (e.g., show an error message to the user)
+        }
+      }
+    }
   }
 
   const handleDocumentSelect = (document: Document) => {
-    router.push(`/reader?id=${document.id}`)
+    router.push(`/reader?id=${document.id}&url=${encodeURIComponent(document.url)}`)
   }
 
   const handleDocumentDelete = (documentToDelete: Document) => {
@@ -62,7 +88,7 @@ const router = useRouter()
             <div className="flex">
               <div className="flex-shrink-0 flex items-center">
                 <Link href="/" className="text-2xl font-bold text-indigo-600">
-                  EduPlatform
+                  StudyLeaf
                 </Link>
               </div>
             </div>
@@ -136,7 +162,15 @@ const router = useRouter()
               <FiUpload className="w-6 h-6 text-gray-600" />
               <span className="font-medium text-gray-600">Drop files to upload, or click to browse</span>
             </span>
-            <input id="file-upload" name="file-upload" type="file" className="hidden" onChange={handleFileUpload} multiple />
+            <input 
+              id="file-upload" 
+              name="file-upload" 
+              type="file" 
+              className="hidden" 
+              onChange={handleFileUpload} 
+              multiple 
+              ref={fileInputRef}
+            />
           </label>
         </div>
 
@@ -146,28 +180,28 @@ const router = useRouter()
           <div className="bg-white rounded-lg shadow-md p-6">
             <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Documents</h2>
             <ul className="space-y-4">
-      {documents.map((doc) => (
-        <li 
-          key={doc.id} 
-          className="flex items-center justify-between p-3 bg-gray-50 rounded-md cursor-pointer hover:bg-gray-100"
-          onClick={() => handleDocumentSelect(doc)}
-        >
-          <div className="flex items-center space-x-3">
-            <FiFile className="w-5 h-5 text-indigo-600" />
-            <span className="font-medium text-gray-700">{doc.name}</span>
-          </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDocumentDelete(doc);
-            }}
-            className="text-sm text-red-600 hover:text-red-800"
-          >
-            <FiTrash2 />
-          </button>
-        </li>
-      ))}
-    </ul>
+              {documents.map((doc) => (
+                <li 
+                  key={doc.id} 
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-md cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleDocumentSelect(doc)}
+                >
+                  <div className="flex items-center space-x-3">
+                    <FiFile className="w-5 h-5 text-indigo-600" />
+                    <span className="font-medium text-gray-700">{doc.name}</span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDocumentDelete(doc);
+                    }}
+                    className="text-sm text-red-600 hover:text-red-800"
+                  >
+                    <FiTrash2 />
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
 
           {/* Document viewer */}

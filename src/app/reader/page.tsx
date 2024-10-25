@@ -21,6 +21,11 @@ import '@react-pdf-viewer/page-navigation/lib/styles/index.css';
 import '@react-pdf-viewer/page-navigation/lib/styles/index.css';
 import { DocumentLoadEvent } from '@react-pdf-viewer/core';
 import { PDFDocumentProxy } from 'pdfjs-dist';
+import axios from 'axios'
+import { useSearchParams } from 'next/navigation';
+import { debounce } from 'lodash';
+import Image from 'next/image'
+import logoSrc from '../img/logo.svg'
 
 
 interface Section {
@@ -64,8 +69,14 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
+interface SearchResult {
+  content: string;
+  page: number;
+}
+
 const PDFViewerPage: React.FC = () => {
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const [pdfUrl, setPdfUrl] = useState<string | null>(searchParams.get('url'));
   const [numPages, setNumPages] = useState<number>(0);
   const [isReading, setIsReading] = useState<boolean>(false);
   
@@ -75,7 +86,7 @@ const PDFViewerPage: React.FC = () => {
   const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0);
   const [utterance, setUtterance] = useState<SpeechSynthesisUtterance | null>(null);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(SelectionMode.Text);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [filteredSections, setFilteredSections] = useState<Section[]>([]);
   const [currentScale, setCurrentScale] = useState<number>(1);
   const [isSpeechMenuOpen, setIsSpeechMenuOpen] = useState(false);
@@ -86,6 +97,9 @@ const PDFViewerPage: React.FC = () => {
   const [currentWordIndex, setCurrentWordIndex] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [goToPageInput, setGoToPageInput] = useState<string>('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   // Add a constant factor to increase container size (e.g., 10% larger)
   const CONTAINER_SIZE_FACTOR = 1.0;
@@ -132,12 +146,24 @@ const PDFViewerPage: React.FC = () => {
     }
   }, [handleError, extractSections]);
 
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const fileUrl = URL.createObjectURL(file);
-      console.log('PDF URL:', fileUrl);  
-      setPdfUrl(fileUrl);
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const response = await axios.post('/api/upload_pdf', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        const fileUrl = response.data.url;
+        console.log('PDF URL:', fileUrl);
+        setPdfUrl(fileUrl);
+      } catch (error) {
+        console.error('Error uploading PDF:', error);
+        // Handle error (e.g., show an error message to the user)
+      }
     }
   }, []);
 
@@ -184,7 +210,6 @@ const PDFViewerPage: React.FC = () => {
     } else {
       setIsReading(true);
       const textToRead = filteredSections[currentSectionIndex]?.text || '';
-      const words = textToRead.split(' ');
       const newUtterance = new SpeechSynthesisUtterance(textToRead);
       newUtterance.rate = readingSpeed;
 
@@ -213,9 +238,28 @@ const PDFViewerPage: React.FC = () => {
     }
   }, [isReading, filteredSections, currentSectionIndex, readingSpeed, moveSection]);
 
+  const debouncedSearch = useCallback(
+    debounce(async (query: string) => {
+      if (query.trim() === '' || !pdfUrl) {
+        setSearchResults([]);
+        return;
+      }
+      try {
+        const response = await axios.post('/api/search', { query, pdfUrl });
+        setSearchResults(response.data.results);
+      } catch (error) {
+        console.error('Error searching:', error);
+      }
+    }, 300),
+    [pdfUrl]
+  );
+
+  useEffect(() => {
+    debouncedSearch(searchQuery);
+  }, [searchQuery, debouncedSearch]);
+
   const handleSearch = useCallback((query: string) => {
-    // Implement search functionality
-    console.log('Searching for:', query);
+    setSearchQuery(query);
   }, []);
 
   // Update the handleSpeedChange function to include utterance in the dependency array
@@ -277,10 +321,7 @@ const PDFViewerPage: React.FC = () => {
         case '-':
           handleZoomOut();
           break;
-        case ' ':
-          event.preventDefault();
-          handleTextToSpeech();
-          break;
+        // Remove the 'space' key handler
         default:
           break;
       }
@@ -310,7 +351,27 @@ const PDFViewerPage: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [moveSection, handleZoomIn, handleZoomOut, handleTextToSpeech, currentScale, pdfWidth]);
+  }, [moveSection, handleZoomIn, handleZoomOut, currentScale, pdfWidth]);
+
+  useEffect(() => {
+    const url = searchParams.get('url');
+    if (url) {
+      setPdfUrl(url);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setIsSearchFocused(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-purple-50 to-indigo-100">
@@ -318,26 +379,41 @@ const PDFViewerPage: React.FC = () => {
         <div className="max-w-7xl mx-auto py-4">
           {/* Top Row */}
           <div className="flex items-center justify-between mb-4">
-            <Link href="/" className="text-2xl font-bold text-indigo-600">
-              EduPlatform
+            <Link href="/" className="flex items-center text-2xl font-bold text-indigo-600">
+              <Image src="/img/logo.svg" alt="StudyLeaf Logo" width={32} height={32} className="mr-2" />
+              StudyLeaf
             </Link>
             
-            <div className="flex items-center space-x-2 flex-1 max-w-2xl mx-4">
-              <Input 
-                type="text" 
-                placeholder="Search..." 
-                className="h-9 border-purple-300 focus:border-purple-500 focus:ring focus:ring-purple-200 focus:ring-opacity-50"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              <Button 
-                size="icon" 
-                variant="ghost" 
-                className="h-9 w-9 hover:bg-purple-200 transition-colors duration-300"
-                onClick={() => handleSearch(searchQuery)}
-              >
-                <Search className="h-5 w-5 text-purple-600" />
-              </Button>
+            <div className="flex items-center space-x-2 flex-1 max-w-2xl mx-4 relative" ref={searchRef}>
+              <div className="relative w-full">
+                <Input 
+                  type="text" 
+                  placeholder="Search..." 
+                  className="h-9 pl-10 border-purple-300 focus:border-purple-500 focus:ring focus:ring-purple-200 focus:ring-opacity-50 w-full"
+                  value={searchQuery}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  onFocus={() => setIsSearchFocused(true)}
+                />
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+              </div>
+              {isSearchFocused && searchResults.length > 0 && (
+                <div className="absolute z-20 w-full mt-1 bg-gradient-to-r from-purple-100 to-indigo-100 border border-purple-200 rounded-md shadow-lg max-h-60 overflow-y-auto top-full">
+                  {searchResults.map((result, index) => (
+                    <div 
+                      key={index} 
+                      className="p-2 hover:bg-white hover:bg-opacity-50 cursor-pointer transition-colors duration-150"
+                      onClick={() => {
+                        jumpToPage(result.page);
+                        setSearchQuery('');
+                        setIsSearchFocused(false);
+                      }}
+                    >
+                      <p className="text-sm text-gray-800">{result.content}</p>
+                      <p className="text-xs text-indigo-600">Page: {result.page}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             
             <div className="flex items-center space-x-4">
@@ -501,7 +577,7 @@ const PDFViewerPage: React.FC = () => {
           </Worker>
         </div>
         <aside className="w-1/4 mt-5 p-4 overflow-y-auto">
-          <PDFAIPanel />
+          <PDFAIPanel pdfUrl={pdfUrl} currentPage={currentPage} totalPages={numPages} />
         </aside>
       </main>
       <footer className="bg-gradient-to-br from-purple-50 to-indigo-100 p-4">

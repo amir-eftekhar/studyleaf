@@ -49,7 +49,7 @@ const PDFTopBar: React.FC<PDFTopBarProps> = ({
       {/* Top Row */}
       <div className="flex items-center justify-between p-3 space-x-4">
         <Link href="/" className="text-2xl font-bold text-indigo-600">
-          EduPlatform
+          StudyLeaf
         </Link>
         
         <div className="flex items-center space-x-2 flex-1 max-w-2xl">
