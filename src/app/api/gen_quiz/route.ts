@@ -1,125 +1,149 @@
 import { NextResponse } from 'next/server';
+import { getContentForPages } from '@/lib/vectorDb';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { getVectorStore } from '@/lib/vectorDb';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 interface QuizQuestion {
   type: 'multiple_choice' | 'free_response' | 'true_false';
   question: string;
-  choices?: { text: string; correct: boolean }[];
-  answer?: string;
-  subject: string;
-  reference: string;
-}
-
-interface QuizConfig {
-  numQuestions: {
-    multiple_choice: number;
-    free_response: number;
-    true_false: number;
-  };
-  difficulty: 'easy' | 'medium' | 'hard';
-  adaptive: boolean;
-  pageRange: [number, number];
-}
-
-async function generateQuiz(content: string, config: QuizConfig): Promise<QuizQuestion[]> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-  
-  const prompt = `Generate a quiz based on the following content. The quiz should have:
-- ${config.numQuestions.multiple_choice} multiple-choice questions
-- ${config.numQuestions.free_response} free-response questions
-- ${config.numQuestions.true_false} true/false questions
-The overall difficulty level should be ${config.difficulty}.
-
-Content:
-${content}
-
-For each question, also provide:
-1. The subject or topic it relates to
-2. A reference to the specific part of the content it's based on
-
-Generate the quiz in the following JSON format:
-[
-  {
-    "type": "multiple_choice",
-    "question": "Question text",
-    "choices": [
-      { "text": "Option A", "correct": false },
-      { "text": "Option B", "correct": true },
-      { "text": "Option C", "correct": false },
-      { "text": "Option D", "correct": false }
-    ],
-    "subject": "Subject or topic",
-    "reference": "Relevant excerpt or page reference"
-  },
-  {
-    "type": "free_response",
-    "question": "Question text",
-    "answer": "Sample answer for evaluation",
-    "subject": "Subject or topic",
-    "reference": "Relevant excerpt or page reference"
-  },
-  {
-    "type": "true_false",
-    "question": "Statement to evaluate",
-    "answer": true,
-    "subject": "Subject or topic",
-    "reference": "Relevant excerpt or page reference"
-  }
-]
-
-Important: Return only the JSON array, without any markdown formatting or additional text.`;
-
-  const result = await model.generateContent(prompt);
-  const quizJson = result.response.text();
-  
-  // Remove any markdown formatting if present
-  const cleanJson = quizJson.replace(/```json\n|\n```/g, '').trim();
-  
-  try {
-    return JSON.parse(cleanJson);
-  } catch (error) {
-    console.error('Error parsing quiz JSON:', error);
-    console.error('Raw quiz JSON:', cleanJson);
-    throw new Error('Failed to parse quiz JSON');
-  }
+  options?: string[];
+  correct_answer: string | boolean;
+  explanation: string;
 }
 
 export async function POST(request: Request) {
-  console.log('Received POST request to /api/gen_quiz');
   try {
     const { documentId, quizConfig } = await request.json();
+    console.log('Received POST request to /api/gen_quiz');
     console.log('Request payload:', { documentId, quizConfig });
 
     if (!documentId || !quizConfig) {
-      console.log('Missing required fields');
-      return NextResponse.json({ error: 'Document ID and quiz configuration are required' }, { status: 400 });
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // Get the vector store instance
-    const vectorStore = await getVectorStore(documentId);
-    
-    // Get content for the specified page range or all pages if endPage is 0
-    const startPage = quizConfig.pageRange[0];
-    const endPage = quizConfig.pageRange[1] || 0; // If endPage is 0, it means get all pages
-    
-    console.log('Retrieving content for pages:', { startPage, endPage });
-    const content = await vectorStore.getContentForPages(startPage, endPage);
-    
+    const cleanDocumentId = documentId.includes('/uploads/') 
+      ? documentId.split('/uploads/')[1] 
+      : documentId;
+
+    const content = await getContentForPages(
+      cleanDocumentId,
+      quizConfig.pageRange[0],
+      quizConfig.pageRange[1]
+    );
+
     if (!content) {
-      console.log('Failed to retrieve document content');
-      return NextResponse.json({ error: 'Failed to retrieve document content' }, { status: 500 });
+      return NextResponse.json({ 
+        error: 'Document not ready or no content found for specified pages.' 
+      }, { status: 404 });
     }
 
-    console.log('Generating quiz');
-    const quiz = await generateQuiz(content, quizConfig);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    
+    // First, get key concepts to ask about
+    const conceptPrompt = `
+      Analyze this educational content and identify ${quizConfig.numQuestions.multiple_choice + 
+      quizConfig.numQuestions.free_response + quizConfig.numQuestions.true_false} key concepts 
+      that would be important to test students on. For each concept, provide:
+      1. The main idea
+      2. Why it's important
+      3. Related details from the content
 
-    console.log('Quiz generated successfully');
-    return NextResponse.json({ quiz });
+      Content to analyze:
+      ${content}
+
+      Format as a simple list of concepts.
+    `;
+
+    const conceptResult = await model.generateContent(conceptPrompt);
+    const concepts = conceptResult.response.text();
+    console.log('\nIdentified Concepts:', concepts);
+
+    // Then, generate questions based on these concepts
+    const questionPrompt = `
+      Using these key concepts:
+      ${concepts}
+
+      Create a quiz with exactly:
+      - ${quizConfig.numQuestions.multiple_choice} multiple choice questions
+      - ${quizConfig.numQuestions.free_response} free response questions
+      - ${quizConfig.numQuestions.true_false} true/false questions
+
+      Difficulty level: ${quizConfig.difficulty}
+      ${quizConfig.focus ? `Focus on: ${quizConfig.focus}` : ''}
+
+      For each question:
+      1. Make it test understanding rather than memorization
+      2. Include clear, specific explanations
+      3. For multiple choice, make all options plausible
+      4. Ensure questions are based on the content provided
+
+      Format each question as a JSON object following this structure exactly:
+      {
+        "type": "multiple_choice" | "free_response" | "true_false",
+        "question": "question text",
+        "options": ["array of choices"] (for multiple choice only),
+        "correct_answer": "correct answer" | true/false,
+        "explanation": "brief explanation"
+      }
+
+      Return only a JSON array of question objects.
+    `;
+
+    const result = await model.generateContent(questionPrompt);
+    const response = result.response.text();
+    console.log('\nRaw AI Response:', response);
+    
+    try {
+      const cleanResponse = response
+        .replace(/```json\n?|\n?```/g, '')
+        .replace(/\n/g, '')
+        .replace(/,\s*([\]}])/g, '$1')
+        .trim();
+
+      const questions = JSON.parse(cleanResponse);
+      
+      const validQuestions = questions.filter((q: any): q is QuizQuestion => {
+        const isValidType = ['multiple_choice', 'free_response', 'true_false'].includes(q.type);
+        const hasRequiredFields = q.question && 'correct_answer' in q && q.explanation;
+        const hasValidOptions = q.type !== 'multiple_choice' || (Array.isArray(q.options) && q.options.length > 0);
+        
+        if (q.type === 'true_false' && typeof q.correct_answer === 'string') {
+          q.correct_answer = q.correct_answer.toLowerCase() === 'true';
+        }
+        
+        return isValidType && hasRequiredFields && hasValidOptions;
+      });
+
+      if (validQuestions.length === 0) {
+        throw new Error('No valid questions generated');
+      }
+
+      console.log('\nGenerated Quiz Questions:');
+      validQuestions.forEach((q: QuizQuestion, index: number) => {
+        console.log(`\nQuestion ${index + 1}:`);
+        console.log('Type:', q.type);
+        console.log('Question:', q.question);
+        if (q.options) {
+          console.log('Options:', q.options);
+        }
+        console.log('Correct Answer:', q.correct_answer);
+        console.log('Explanation:', q.explanation);
+        console.log('---');
+      });
+
+      return NextResponse.json({ questions: validQuestions });
+    } catch (error) {
+      console.error('Error parsing quiz response:', error);
+      console.error('Raw response:', response);
+      return NextResponse.json({ error: 'Failed to generate valid quiz' }, { status: 500 });
+    }
+
   } catch (error) {
     console.error('Error in gen_quiz POST route:', error);
-    return NextResponse.json({ error: 'Failed to generate quiz', details: (error as Error).message }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to generate quiz' },
+      { status: 500 }
+    );
   }
 }

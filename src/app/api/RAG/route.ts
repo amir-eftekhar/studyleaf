@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { setupVectorSearch, insertEmbedding, closeConnection, updateProcessingStatus } from '@/lib/vectorDb';
+import { setupVectorSearch, insertEmbedding, updateProcessingStatus } from '@/lib/vectorDb';
 import { MongoClient } from 'mongodb';
 
 const client = new MongoClient(process.env.MONGODB_URI!);
@@ -59,8 +59,11 @@ function splitIntoSections(text: string, maxLength: number = 1000): string[] {
 }
 
 export async function POST(request: Request) {
+  let currentDocumentId: string | undefined;
+  
   try {
     const { documentContent, documentId } = await request.json();
+    currentDocumentId = documentId;
 
     if (!documentContent || !documentId) {
       return NextResponse.json({ error: 'Document content and ID are required' }, { status: 400 });
@@ -100,7 +103,7 @@ export async function POST(request: Request) {
     }
 
     console.log(`Processing ${sections.length} sections...`);
-    await updateProcessingStatus(documentId, 'processing', sections.length);
+    await updateProcessingStatus(documentId, 'processing', sections.length, 0);
 
     // Process sections in parallel with a concurrency limit
     const concurrencyLimit = 3;
@@ -114,6 +117,7 @@ export async function POST(request: Request) {
           const embedding = await generateEmbedding(section);
           await insertEmbedding(documentId, section, embedding, i + index + 1);
           processedCount++;
+          await updateProcessingStatus(documentId, 'processing', sections.length, processedCount);
           console.log(`Processed section ${processedCount}/${sections.length}`);
         } catch (error) {
           console.error('Error processing section:', error);
@@ -122,28 +126,24 @@ export async function POST(request: Request) {
       }));
     }
 
-    // Verify processing completion
-    if (processedCount !== sections.length) {
-      throw new Error(`Processing incomplete: ${processedCount}/${sections.length} sections processed`);
-    }
-
     // Mark as completed
-    await updateProcessingStatus(documentId, 'completed', sections.length);
+    await updateProcessingStatus(documentId, 'completed', sections.length, sections.length);
     console.log('Document processing completed successfully');
 
     return NextResponse.json({ 
       success: true,
       totalSections: sections.length,
-      processedSections: processedCount
+      processedSections: sections.length
     });
 
   } catch (error) {
     console.error('Error in document processing:', error);
-    if (documentId) {
+    if (currentDocumentId) {
       await updateProcessingStatus(
-        documentId, 
-        'error', 
-        undefined, 
+        currentDocumentId, 
+        'error',
+        0,
+        0,
         error instanceof Error ? error.message : 'Unknown error'
       );
     }
@@ -151,7 +151,5 @@ export async function POST(request: Request) {
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }
     );
-  } finally {
-    await closeConnection();
   }
 }

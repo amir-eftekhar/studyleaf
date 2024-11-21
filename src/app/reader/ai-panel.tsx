@@ -70,11 +70,9 @@ const MarkdownRenderer: React.FC<{ children: string }> = ({ children }) => {
 interface QuizQuestion {
   type: 'multiple_choice' | 'free_response' | 'true_false';
   question: string;
-  choices?: { text: string; correct: boolean }[];
-  answer?: string;
-  subject: string;
-  reference: string;
-  userAnswer?: string;
+  options?: string[];
+  correct_answer: string | boolean;
+  explanation: string;
 }
 
 interface QuizResult {
@@ -174,6 +172,89 @@ const GeneratingAnimation = () => (
   </div>
 );
 
+// PageRangeInputs component
+const PageRangeInputs: React.FC<{
+  value: [number, number];
+  onChange: (value: [number, number]) => void;
+  min: number;
+  max: number;
+}> = ({ value, onChange, min, max }) => {
+  // Local state for input values
+  const [startInput, setStartInput] = useState(value[0].toString());
+  const [endInput, setEndInput] = useState(value[1].toString());
+
+  const handleStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target.value;
+    setStartInput(input);
+    
+    // Only update parent state if input is a valid number
+    const newStart = parseInt(input);
+    if (!isNaN(newStart)) {
+      const validStart = Math.max(min, Math.min(newStart, parseInt(endInput) || max));
+      onChange([validStart, value[1]]);
+    }
+  };
+
+  const handleEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target.value;
+    setEndInput(input);
+    
+    // Only update parent state if input is a valid number
+    const newEnd = parseInt(input);
+    if (!isNaN(newEnd)) {
+      const validEnd = Math.max(parseInt(startInput) || min, Math.min(newEnd, max));
+      onChange([value[0], validEnd]);
+    }
+  };
+
+  // Handle blur events to validate and format inputs
+  const handleStartBlur = () => {
+    const newStart = parseInt(startInput);
+    if (isNaN(newStart)) {
+      setStartInput(value[0].toString());
+    } else {
+      const validStart = Math.max(min, Math.min(newStart, parseInt(endInput) || max));
+      setStartInput(validStart.toString());
+      onChange([validStart, value[1]]);
+    }
+  };
+
+  const handleEndBlur = () => {
+    const newEnd = parseInt(endInput);
+    if (isNaN(newEnd)) {
+      setEndInput(value[1].toString());
+    } else {
+      const validEnd = Math.max(parseInt(startInput) || min, Math.min(newEnd, max));
+      setEndInput(validEnd.toString());
+      onChange([value[0], validEnd]);
+    }
+  };
+
+  return (
+    <div className="flex items-center space-x-2">
+      <Input
+        type="text"
+        value={startInput}
+        onChange={handleStartChange}
+        onBlur={handleStartBlur}
+        placeholder="Start"
+        className="w-20 text-center"
+        maxLength={4} // Limit input length
+      />
+      <span>to</span>
+      <Input
+        type="text"
+        value={endInput}
+        onChange={handleEndChange}
+        onBlur={handleEndBlur}
+        placeholder="End"
+        className="w-20 text-center"
+        maxLength={4} // Limit input length
+      />
+    </div>
+  );
+};
+
 const PDFAIPanel: React.FC<PDFAIPanelProps> = ({ 
   pdfUrl, 
   pdfContent, 
@@ -212,7 +293,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
   const [detailedQuizFeedback, setDetailedQuizFeedback] = useState<DetailedQuizFeedback[]>([])
   const [notesFocus, setNotesFocus] = useState('')
   const [quizPageRange, setQuizPageRange] = useState<[number, number]>([1, totalPages])
-  const [notesPageRange, setNotesPageRange] = useState<[number, number]>([currentPage, currentPage])
+  const [notesPageRange, setNotesPageRange] = useState<[number, number]>([1, totalPages])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [isEmbedding, setIsEmbedding] = useState(false)
@@ -230,8 +311,9 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
   const [isStreaming, setIsStreaming] = useState(false);
   const [notesDescription, setNotesDescription] = useState('');
   const [summaryDescription, setSummaryDescription] = useState('');
-  const [summaryPageRange, setSummaryPageRange] = useState<[number, number]>([currentPage, currentPage]);
+  const [summaryPageRange, setSummaryPageRange] = useState<[number, number]>([1, totalPages]);
   const [summaryFocus, setSummaryFocus] = useState('');
+  const [noteStyle, setNoteStyle] = useState<'cornell' | 'bullet' | 'flowchart' | 'paragraph'>('bullet');
 
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -261,49 +343,30 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
     setMessages(prev => [...prev, { role: 'user', content: inputMessage }]);
 
     try {
-      // Extract just the filename part after /uploads/
       const match = pdfUrl.match(/\/uploads\/(.+)$/);
-      const documentId = match ? match[1] : pdfUrl;
+      const documentId = match ? decodeURIComponent(match[1]) : pdfUrl;
       
-      console.log('Starting chat process:', { 
-        documentId, 
-        messageLength: inputMessage.length,
-        currentMessages: messages.length 
-      });
-
-      // First, check if document is processed
-      const statusResponse = await fetch(`/api/processing-status?documentId=${encodeURIComponent(documentId)}`);
-      const statusData = await statusResponse.json();
-      console.log('Document status:', statusData);
-
-      // If not processed, process it first
-      if (!statusData || statusData.status !== 'completed') {
-        console.log('Processing document first...');
-        const processResponse = await fetch('/api/rag_chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            documentId,
-            content: pdfContent
-          }),
-        });
-
-        if (!processResponse.ok) {
-          throw new Error('Failed to process document');
+      // First ensure document is processed
+      if (!isVectorized) {
+        const processResult = await checkAndProcessDocument();
+        if (!processResult) {
+          throw new Error('Document processing failed');
         }
-
-        const processResult = await processResponse.json();
-        console.log('Processing result:', processResult);
       }
 
-      // Now send the chat message
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
       console.log('Sending chat message...');
-      const chatResponse = await fetch('/api/rag_chat', {
+      const chatResponse = await fetch(`${baseUrl}/api/rag_chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           documentId,
-          message: inputMessage
+          message: inputMessage,
+          type: 'chat',
+          metadata: {
+            filename: documentId,
+            timestamp: new Date().toISOString()
+          }
         }),
       });
 
@@ -342,88 +405,164 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [pdfUrl, inputMessage, messages, toast, pdfContent]);
+  }, [pdfUrl, inputMessage, messages, toast, pdfContent, isVectorized]);
 
   const checkAndProcessDocument = async () => {
-    if (!pdfUrl) return;
+    if (!pdfUrl || !pdfContent) {
+      console.log('Missing required data:', { pdfUrl, hasPdfContent: !!pdfContent });
+      return false;
+    }
 
     try {
-      // Extract just the filename part after /uploads/
+      // Clean up the documentId - remove /uploads/ prefix and decode URI components
       const match = pdfUrl.match(/\/uploads\/(.+)$/);
-      const documentId = match ? match[1] : pdfUrl;
+      const documentId = match ? decodeURIComponent(match[1]) : pdfUrl;
       
-      const response = await fetch(`/api/processing-status?documentId=${encodeURIComponent(pdfUrl)}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to check status: ${response.status}`);
-      }
+      console.log('Starting document processing for:', { documentId });
 
-      const data = await response.json();
-      console.log('Processing status:', data);
-
-      if (data.status === 'completed') {
-        setIsProcessing(false);
-        setIsVectorized(true);
-        setProcessingStatus('completed');
-        return;
-      }
-
-      // If not completed, start processing
-      console.log('Document needs processing first');
-      
-      const processResponse = await fetch('/api/rag_chat', {
+      // First, initiate processing
+      const processResponse = await fetch('/api/rag', {  // Changed to /api/rag endpoint
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           documentId,
-          content: pdfContent // Make sure to include the content for processing
+          documentContent: pdfContent,  // Changed to documentContent
+          type: 'process'
         }),
       });
 
       if (!processResponse.ok) {
-        throw new Error('Failed to process document');
+        const errorData = await processResponse.json().catch(() => ({ error: 'Failed to parse error response' }));
+        console.error('Processing error response:', errorData);
+        throw new Error(errorData.error || `Failed to process document: ${processResponse.status}`);
       }
+
+      const processResult = await processResponse.json();
+      console.log('Processing initiated:', processResult);
 
       setIsProcessing(true);
       setProcessingStatus('processing');
 
+      // Poll for completion
+      let attempts = 0;
+      const maxAttempts = 30;
+      
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const statusResponse = await fetch(`/api/processing-status?documentId=${encodeURIComponent(documentId)}`);
+        if (!statusResponse.ok) {
+          console.error('Status check failed:', statusResponse.status);
+          continue;
+        }
+
+        const statusData = await statusResponse.json();
+        console.log(`Processing status check ${attempts + 1}/${maxAttempts}:`, statusData);
+        
+        if (statusData.status === 'completed') {
+          console.log('Processing completed successfully');
+          setIsProcessing(false);
+          setIsVectorized(true);
+          setProcessingStatus('completed');
+          return true;
+        }
+        
+        if (statusData.status === 'error') {
+          throw new Error('Processing failed');
+        }
+
+        if (statusData.status === 'processing') {
+          const progress = statusData.processedSections / statusData.totalSections * 100;
+          setProcessingProgress(progress);
+        }
+        
+        attempts++;
+      }
+
+      throw new Error('Processing timed out');
+
     } catch (error) {
-      console.error('Error checking/processing document:', error);
+      console.error('Error in checkAndProcessDocument:', error);
       setError(error instanceof Error ? error.message : 'Failed to process document');
       setIsProcessing(false);
       setProcessingStatus('error');
+      setIsVectorized(false);
+      toast({
+        title: "Processing Error",
+        description: error instanceof Error ? error.message : "Failed to process document",
+        variant: "destructive",
+      });
+      return false;
     }
   };
 
-  // Check status only once when component mounts or pdfUrl changes
+  // Remove the useEffect that was causing multiple processing attempts
   useEffect(() => {
-    if (pdfUrl) {
+    if (pdfUrl && pdfContent && !isVectorized && !isProcessing) {
       checkAndProcessDocument();
     }
-  }, [pdfUrl]);
+  }, [pdfUrl, pdfContent]); // Only run when document changes
 
   const addMessage = useCallback((message: Message) => {
     setMessages(prev => [...prev, message]);
   }, []);
 
   const debouncedSearch = useCallback(
-    debounce((query: string) => {
+    debounce(async (query: string) => {
       if (query.trim() === '') {
-        setSearchResults([])
-        return
+        setSearchResults([]);
+        return;
       }
-      const searchPdf = async () => {
-        try {
-          const response = await axios.post('/api/search', { query, pdfUrl })
-          setSearchResults(response.data.results)
-        } catch (error) {
-          console.error('Error searching:', error)
+
+      try {
+        if (!pdfUrl) {
+          console.error('No PDF URL available');
+          return;
         }
+
+        // Extract documentId from pdfUrl
+        const match = pdfUrl.match(/\/uploads\/(.+)$/);
+        const documentId = match ? decodeURIComponent(match[1]) : pdfUrl;
+
+        console.log('Searching document:', { documentId, query });
+
+        const response = await fetch('/api/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            query,
+            documentId,
+            pdfUrl // Include this for backward compatibility
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `Search failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('Search results:', data);
+
+        if (data.results) {
+          setSearchResults(data.results);
+        } else {
+          setSearchResults([]);
+        }
+      } catch (error) {
+        console.error('Error searching:', error);
+        setSearchResults([]);
+        toast({
+          title: "Search Error",
+          description: error instanceof Error ? error.message : "Failed to search document",
+          variant: "destructive",
+        });
       }
-      searchPdf()
     }, 300),
-    [pdfUrl]
-  )
+    [pdfUrl, toast]
+  );
 
   useEffect(() => {
     setMounted(true)
@@ -445,6 +584,18 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
   const handleGenerateNotes = async () => {
     if (!pdfUrl) return;
     
+    // Validate page ranges
+    if (notesPageRange[0] > notesPageRange[1] || 
+        notesPageRange[0] < 1 || 
+        notesPageRange[1] > totalPages) {
+      toast({
+        title: "Invalid Page Range",
+        description: "Please enter a valid page range",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     setIsLoading(true);
     try {
       const response = await fetch('/api/gen_notes', {
@@ -454,7 +605,8 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
           documentId: pdfUrl,
           pageRange: notesPageRange,
           focus: notesFocus,
-          description: notesDescription
+          description: notesDescription,
+          style: noteStyle
         })
       });
 
@@ -469,7 +621,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
       console.error('Error generating notes:', error);
       toast({
         title: "Error",
-        description: error instanceof Error ? error.message : "Failed to generate notes. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to generate notes",
         variant: "destructive",
       });
     } finally {
@@ -480,25 +632,42 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
   const handleStartQuiz = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await axios.post('/api/gen_quiz', {
-        documentId: pdfUrl,
-        quizConfig,
+      const response = await fetch('/api/gen_quiz', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId: pdfUrl,
+          quizConfig,
+        }),
       });
-      setQuizQuestions(response.data.quiz);
-      setCurrentQuestionIndex(0);
-      setQuizResults([]);
-      setShowResults(false);
-      setQuizAnswers({});
+
+      if (!response.ok) {
+        throw new Error('Failed to generate quiz');
+      }
+
+      const data = await response.json();
+      if (data.questions && Array.isArray(data.questions)) {
+        setQuizQuestions(data.questions);
+        setCurrentQuestionIndex(0);
+        setQuizResults([]);
+        setShowResults(false);
+        setQuizAnswers({});
+      } else {
+        throw new Error('Invalid quiz data received');
+      }
     } catch (error) {
       console.error('Error generating quiz:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        console.error('Server response:', error.response.data);
-      }
-      alert('Failed to generate quiz. Please try again.');
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate quiz",
+        variant: "destructive",
+      });
     } finally {
       setIsLoading(false);
     }
-  }, [pdfUrl, quizConfig]);
+  }, [pdfUrl, quizConfig, toast]);
 
   const handleAnswerSelect = useCallback((answer: string) => {
     setQuizAnswers(prev => ({
@@ -532,13 +701,13 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
   }, [quizQuestions, quizAnswers]);
 
   const handleNextQuestion = useCallback(() => {
-    if (currentQuestionIndex < quizQuestions.length - 1) {
+    if (quizQuestions && currentQuestionIndex < quizQuestions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
     } else {
       // All questions answered, submit for grading
       handleQuizSubmit();
     }
-  }, [currentQuestionIndex, quizQuestions.length, handleQuizSubmit]);
+  }, [currentQuestionIndex, quizQuestions?.length, handleQuizSubmit]);
 
   const handleNewQuiz = useCallback(() => {
     setQuizQuestions([]);
@@ -557,45 +726,6 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
       pageRange: [1, totalPages],
     });
   }, [totalPages]);
-
-  const PageRangeInputs = ({ value, onChange, min, max }: { 
-    value: [number, number], 
-    onChange: (value: [number, number]) => void, 
-    min: number, 
-    max: number 
-  }) => {
-    const handleStartPageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newStart = Math.min(Math.max(parseInt(e.target.value) || min, min), max);
-      onChange([newStart, Math.max(newStart, value[1])]);
-    };
-
-    const handleEndPageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newEnd = Math.min(Math.max(parseInt(e.target.value) || min, min), max);
-      onChange([Math.min(value[0], newEnd), newEnd]);
-    };
-
-    return (
-      <div className="flex items-center space-x-2">
-        <Input
-          type="number"
-          value={value[0]}
-          onChange={handleStartPageChange}
-          min={min}
-          max={max}
-          className="w-24 bg-gray-800 text-white border-gray-700 focus:ring-purple-500"
-        />
-        <span className="text-white">to</span>
-        <Input
-          type="number"
-          value={value[1]}
-          onChange={handleEndPageChange}
-          min={min}
-          max={max}
-          className="w-24 bg-gray-800 text-white border-gray-700 focus:ring-purple-500"
-        />
-      </div>
-    );
-  };
 
   const renderQuizConfig = () => (
     <div className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
@@ -701,77 +831,106 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
     </div>
   );
 
-  const renderQuizQuestion = useCallback(() => {
-    if (currentQuestionIndex >= quizQuestions.length) return null;
-    const question = quizQuestions[currentQuestionIndex];
-    
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -20 }}
-        transition={{ duration: 0.3 }}
-        className="space-y-4"
-      >
-        <h3 className="text-xl font-semibold">{question.question}</h3>
-        {question.type === 'multiple_choice' && (
-          <div className="space-y-2">
-            {question.choices?.map((choice, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.1 }}
-              >
-                <Button
-                  onClick={() => handleAnswerSelect(choice.text)}
-                  className={`w-full text-left justify-start py-4 px-6 border-b border-gray-200 hover:bg-gray-50 transition-colors ${
-                    quizAnswers[currentQuestionIndex] === choice.text ? 'bg-purple-100' : ''
+  const renderQuizQuestion = () => (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h3 className={`text-lg font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+          Question {currentQuestionIndex + 1} of {quizQuestions.length}
+        </h3>
+        <Button
+          variant="outline"
+          onClick={handleNewQuiz}
+          className={theme === 'dark' ? 'text-white' : ''}
+        >
+          New Quiz
+        </Button>
+      </div>
+
+      <div className={`p-6 rounded-lg border ${
+        theme === 'dark' 
+          ? 'bg-gray-800 border-gray-700 text-white' 
+          : 'bg-white border-gray-200 text-gray-900'
+      }`}>
+        <p className="text-lg font-medium mb-4">{quizQuestions[currentQuestionIndex].question}</p>
+        
+        {quizQuestions[currentQuestionIndex].type === 'multiple_choice' && quizQuestions[currentQuestionIndex].options && (
+          <RadioGroup
+            value={quizAnswers[currentQuestionIndex] || ''}
+            onValueChange={handleAnswerSelect}
+            className="space-y-2"
+          >
+            {quizQuestions[currentQuestionIndex].options.map((option: string, idx: number) => (
+              <div key={idx} className="flex items-center space-x-2">
+                <RadioGroupItem value={option} id={`option-${idx}`} />
+                <Label 
+                  htmlFor={`option-${idx}`} 
+                  className={`text-sm font-medium ${
+                    theme === 'dark' ? 'text-gray-200' : 'text-gray-700'
                   }`}
                 >
-                  {choice.text}
-                </Button>
-              </motion.div>
+                  {option}
+                </Label>
+              </div>
             ))}
-          </div>
+          </RadioGroup>
         )}
-        {question.type === 'free_response' && (
-          <div>
-            <Textarea
-              value={quizAnswers[currentQuestionIndex] || ''}
-              onChange={(e) => handleAnswerSelect(e.target.value)}
-              placeholder="Type your answer here..."
-              className="w-full h-32"
-            />
-          </div>
+
+        {quizQuestions[currentQuestionIndex].type === 'true_false' && (
+          <RadioGroup
+            value={quizAnswers[currentQuestionIndex] || ''}
+            onValueChange={handleAnswerSelect}
+            className="space-y-2"
+          >
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="true" id="true" />
+              <Label 
+                htmlFor="true" 
+                className={`text-sm font-medium ${
+                  theme === 'dark' ? 'text-gray-200' : 'text-gray-700'
+                }`}
+              >
+                True
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="false" id="false" />
+              <Label 
+                htmlFor="false" 
+                className={`text-sm font-medium ${
+                  theme === 'dark' ? 'text-gray-200' : 'text-gray-700'
+                }`}
+              >
+                False
+              </Label>
+            </div>
+          </RadioGroup>
         )}
-        {question.type === 'true_false' && (
-          <div className="flex space-x-4">
-            <Button 
-              onClick={() => handleAnswerSelect('true')}
-              className={quizAnswers[currentQuestionIndex] === 'true' ? 'bg-purple-100' : ''}
-            >
-              True
-            </Button>
-            <Button 
-              onClick={() => handleAnswerSelect('false')}
-              className={quizAnswers[currentQuestionIndex] === 'false' ? 'bg-purple-100' : ''}
-            >
-              False
-            </Button>
-          </div>
+
+        {quizQuestions[currentQuestionIndex].type === 'free_response' && (
+          <Textarea
+            value={quizAnswers[currentQuestionIndex] || ''}
+            onChange={(e) => handleAnswerSelect(e.target.value)}
+            placeholder="Type your answer here..."
+            className={`min-h-[100px] w-full ${
+              theme === 'dark' 
+                ? 'bg-gray-700 text-white border-gray-600' 
+                : 'bg-white text-gray-900 border-gray-300'
+            }`}
+          />
         )}
-        <div className="flex justify-between items-center mt-4">
-          <div className="text-sm text-gray-500">
-            Question {currentQuestionIndex + 1} of {quizQuestions.length}
-          </div>
-          <Button onClick={handleNextQuestion} disabled={!quizAnswers[currentQuestionIndex]}>
-            {currentQuestionIndex < quizQuestions.length - 1 ? 'Next' : 'Submit Quiz'}
-          </Button>
-        </div>
-      </motion.div>
-    );
-  }, [quizQuestions, currentQuestionIndex, quizAnswers, handleAnswerSelect, handleNextQuestion]);
+      </div>
+
+      <div className="flex justify-end space-x-2">
+        <Button
+          onClick={handleNextQuestion}
+          disabled={!quizAnswers[currentQuestionIndex]}
+          className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white"
+        >
+          {currentQuestionIndex === quizQuestions.length - 1 ? 'Submit' : 'Next'}
+        </Button>
+      </div>
+    </div>
+  );
 
   const renderQuizResults = useCallback(() => {
     const data = {
@@ -826,10 +985,12 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
           ))}
         </div>
         <div>
-          <h3 className="text-xl font-semibold mb-4">Subjects to Review:</h3>
+          <h3 className={`text-xl font-semibold mb-4 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+            Subjects to Review:
+          </h3>
           <ul className="list-disc list-inside space-y-2">
             {quizResults.filter(r => (r.correct / r.total) < 0.7).map(r => (
-              <li key={r.subject} className="text-gray-700">
+              <li key={r.subject} className={`${theme === 'dark' ? 'text-white' : 'text-gray-700'}`}>
                 {r.subject} - {((r.correct / r.total) * 100).toFixed(2)}% correct
               </li>
             ))}
@@ -1099,6 +1260,18 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
   const handleGenerateSummary = async () => {
     if (!pdfUrl) return;
     
+    // Validate page ranges
+    if (summaryPageRange[0] > summaryPageRange[1] || 
+        summaryPageRange[0] < 1 || 
+        summaryPageRange[1] > totalPages) {
+      toast({
+        title: "Invalid Page Range",
+        description: "Please enter a valid page range",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     setIsLoading(true);
     try {
       const response = await fetch('/api/gen_notes', {
@@ -1124,7 +1297,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
       console.error('Error generating summary:', error);
       toast({
         title: "Error",
-        description: error instanceof Error ? error.message : "Failed to generate summary. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to generate summary",
         variant: "destructive",
       });
     } finally {
@@ -1155,6 +1328,13 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
 
     checkVectorization();
   }, [pdfUrl]);
+
+  // Update useEffect to handle totalPages changes
+  useEffect(() => {
+    setNotesPageRange([1, totalPages]);
+    setQuizPageRange([1, totalPages]);
+    setSummaryPageRange([1, totalPages]);
+  }, [totalPages]);
 
   if (!mounted) {
     return null;
@@ -1188,7 +1368,11 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
           ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}
         >
           {/* Panel Header */}
-          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <div className={`flex items-center justify-between p-4 border-b ${
+            theme === 'dark' 
+              ? 'bg-gray-800/90 border-gray-700 text-white' 
+              : 'bg-white/90 border-gray-200 text-gray-900'
+          }`}>
             <div className="flex items-center space-x-2">
               {activePanel && (
                 <button
@@ -1198,7 +1382,9 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
                   <FiChevronLeft size={20} />
                 </button>
               )}
-              <h2 className="text-lg font-semibold text-gray-900">
+              <h2 className={`text-xl font-semibold ${
+                theme === 'dark' ? 'text-white' : 'text-gray-900'
+              }`}>
                 {activePanel ? activePanel.charAt(0).toUpperCase() + activePanel.slice(1) : 'AI Assistant'}
               </h2>
             </div>
@@ -1384,7 +1570,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="p-6"
+                      className="p-6 space-y-4"
                     >
                       <div className="text-gray-900">
                         {!quizQuestions.length ? renderQuizConfig() : 
@@ -1440,6 +1626,24 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
                         />
                       </div>
 
+                      <div className="space-y-2">
+                        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Note Style</Label>
+                        <Select
+                          value={noteStyle}
+                          onValueChange={(value: 'cornell' | 'bullet' | 'flowchart' | 'paragraph') => setNoteStyle(value)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select note style" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cornell">Cornell Notes</SelectItem>
+                            <SelectItem value="bullet">Bullet Points</SelectItem>
+                            <SelectItem value="flowchart">Flowchart</SelectItem>
+                            <SelectItem value="paragraph">Paragraphs</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
                       <Button 
                         onClick={handleGenerateNotes}
                         disabled={isLoading}
@@ -1460,36 +1664,8 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
                       </Button>
 
                       <div className="rounded-lg p-6 bg-gray-800 border border-gray-700 shadow-xl">
-                        {isEditingNotes ? (
-                          <Textarea
-                            value={notes}
-                            onChange={(e) => setNotes(e.target.value)}
-                            className="w-full h-[400px] bg-gray-900 text-white border-gray-700 
-                              focus:ring-purple-500 resize-none"
-                          />
-                        ) : (
-                          <div className="prose prose-invert max-w-none text-white">
-                            <MarkdownRenderer>{notes}</MarkdownRenderer>
-                          </div>
-                        )}
-                        <div className="flex justify-end space-x-2 mt-4">
-                          <Button
-                            onClick={() => setIsEditingNotes(!isEditingNotes)}
-                            className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white
-                              hover:from-purple-600 hover:to-indigo-700 transition-all duration-200"
-                          >
-                            {isEditingNotes ? (
-                              <>
-                                <FiSave className="mr-2" />
-                                Save
-                              </>
-                            ) : (
-                              <>
-                                <FiEdit2 className="mr-2" />
-                                Edit
-                              </>
-                            )}
-                          </Button>
+                        <div className="prose prose-invert max-w-none text-white">
+                          <MarkdownRenderer>{notes}</MarkdownRenderer>
                         </div>
                       </div>
                     </motion.div>
@@ -1540,6 +1716,25 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
                           } focus:ring-purple-500 min-h-[100px]`}
                         />
                       </div>
+
+                      <Button 
+                        onClick={handleGenerateSummary}
+                        disabled={isLoading}
+                        className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 
+                          text-white hover:from-purple-600 hover:to-indigo-700 
+                          transition-all duration-200 shadow-lg hover:shadow-xl"
+                      >
+                        {isLoading ? (
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="mr-2"
+                          >
+                            <Loader2 className="w-5 h-5" />
+                          </motion.div>
+                        ) : null}
+                        Generate Summary
+                      </Button>
 
                       <div className="rounded-lg p-6 bg-gray-800 border border-gray-700 shadow-xl">
                         <div className="prose prose-invert max-w-none text-white">

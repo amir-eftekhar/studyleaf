@@ -129,6 +129,7 @@ const PDFViewerContent: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
+  const [currentReadingText, setCurrentReadingText] = useState<string | null>(null);
 
   // Initialize plugins
   const selectionModePluginInstance = selectionModePlugin({ selectionMode });
@@ -304,26 +305,48 @@ const PDFViewerContent: React.FC = () => {
     if (isReading) {
       window.speechSynthesis.cancel();
       setIsReading(false);
-      setUtterance(null);
+      setCurrentReadingText(null);
+      // Remove any existing selection
+      window.getSelection()?.removeAllRanges();
     } else {
       setIsReading(true);
       const textToRead = filteredSections[currentSectionIndex]?.text || '';
       const newUtterance = new SpeechSynthesisUtterance(textToRead);
       newUtterance.rate = readingSpeed;
 
+      // Find and select the text
+      const textElements = document.querySelectorAll('.rpv-core__text-layer-text');
+      textElements.forEach((element) => {
+        const text = element.textContent || '';
+        if (text.includes(textToRead)) {
+          // Create a range and select the text
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          
+          // Scroll the selected text into view
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+
       newUtterance.onend = () => {
         setIsReading(false);
-        setUtterance(null);
+        setCurrentReadingText(null);
+        // Remove selection when done
+        window.getSelection()?.removeAllRanges();
         moveSection(1);
       };
 
       newUtterance.onerror = (event) => {
         console.error('SpeechSynthesisUtterance error:', event);
         setIsReading(false);
-        setUtterance(null);
+        setCurrentReadingText(null);
+        // Remove selection on error
+        window.getSelection()?.removeAllRanges();
       };
 
-      setUtterance(newUtterance);
       window.speechSynthesis.speak(newUtterance);
     }
   }, [isReading, filteredSections, currentSectionIndex, readingSpeed, moveSection]);
@@ -542,7 +565,7 @@ const PDFViewerContent: React.FC = () => {
             <div className="w-full max-w-2xl mx-auto relative">
               <Input
                 type="text"
-                placeholder="Search your sets, notes, or classes..."
+                placeholder="Search document for relevant content..."
                 className={`h-10 pl-10 pr-4 w-full rounded-full ${
                   theme === 'dark' 
                     ? 'bg-gray-700/50 text-white border-gray-600' 

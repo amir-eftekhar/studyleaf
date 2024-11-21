@@ -23,9 +23,11 @@ export async function GET(request: NextRequest) {
     
     if (!status) {
       return NextResponse.json({
+        documentId: cleanDocumentId,
         status: 'pending',
         processedSections: 0,
-        totalSections: 0
+        totalSections: 0,
+        updatedAt: new Date()
       });
     }
 

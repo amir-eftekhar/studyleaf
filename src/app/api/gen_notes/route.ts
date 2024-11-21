@@ -1,126 +1,156 @@
 import { NextResponse } from 'next/server';
+import { getContentForPages } from '@/lib/vectorDb';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { getVectorStore, getProcessingStatus } from '@/lib/vectorDb';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
+type NoteStyle = 'cornell' | 'bullet' | 'flowchart' | 'paragraph';
+
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    console.log('Received request body:', body);
+    const { documentId, pageRange, focus, description, type = 'notes', style = 'bullet' } = await request.json();
 
-    const { documentId, pageRange, focus } = body;
-
-    if (!documentId) {
-      console.log('Missing documentId');
-      return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
+    if (!documentId || !pageRange) {
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    if (!pageRange || !Array.isArray(pageRange) || pageRange.length !== 2) {
-      console.log('Invalid page range:', pageRange);
-      return NextResponse.json({ error: 'Valid page range is required' }, { status: 400 });
-    }
+    // Clean document ID
+    const cleanDocumentId = documentId.includes('/uploads/') 
+      ? documentId.split('/uploads/')[1] 
+      : documentId;
 
-    // Check processing status first
-    const processingStatus = await getProcessingStatus(documentId);
-    console.log('Processing status:', processingStatus);
+    // Get content for specified pages
+    const content = await getContentForPages(
+      cleanDocumentId,
+      pageRange[0],
+      pageRange[1]
+    );
 
-    if (!processingStatus || processingStatus.status === 'pending') {
-      return NextResponse.json(
-        { 
-          error: 'Document is not yet processed',
-          status: 'pending',
-          message: 'Please wait while we process your document.'
-        },
-        { status: 202 }
-      );
-    }
-
-    if (processingStatus.status === 'processing') {
-      return NextResponse.json(
-        { 
-          error: 'Document is still being processed',
-          status: 'processing',
-          progress: (processingStatus.processedSections / processingStatus.totalSections) * 100,
-          message: 'Document is being processed. Please wait.'
-        },
-        { status: 202 }
-      );
-    }
-
-    if (processingStatus.status === 'error') {
-      return NextResponse.json(
-        { 
-          error: processingStatus.error || 'Document processing failed',
-          status: 'error'
-        },
-        { status: 500 }
-      );
-    }
-    
-    // Get the vector store instance
-    console.log('Getting vector store for document:', documentId);
-    const vectorStore = await getVectorStore(documentId);
-    
-    // Get content for the specified page range
-    console.log('Retrieving content for pages:', pageRange);
-    const content = await vectorStore.getContentForPages(pageRange[0], pageRange[1]);
-    
     if (!content) {
-      console.log('No content found for page range:', pageRange);
-      return NextResponse.json({ 
-        error: 'No content found for the specified page range' 
-      }, { status: 404 });
+      return NextResponse.json({ error: 'No content found for specified pages' }, { status: 404 });
     }
 
-    console.log('Generating notes with content length:', content.length);
-    const model = genAI.getGenerativeModel({ model: "gemini-" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    
+    let prompt = '';
+    
+    if (type === 'summary') {
+      prompt = `Create a concise summary of the following content.
+         ${focus ? `Focus on: ${focus}` : ''}
+         ${description ? `Additional requirements: ${description}` : ''}
+         
+         Content:
+         ${content}`;
+    } else {
+      // Different prompts for each note style
+      switch (style as NoteStyle) {
+        case 'cornell':
+          prompt = `Create Cornell-style notes from the following content.
+            ${focus ? `Focus on: ${focus}` : ''}
+            ${description ? `Additional requirements: ${description}` : ''}
+            
+            Format the notes in this structure:
+            # Main Topic
+            
+            ## Key Questions/Cues (Left Column)
+            - Important questions about the content
+            - Key terms and concepts
+            - Main ideas to recall
+            
+            ## Notes (Right Column)
+            - Detailed notes and explanations
+            - Examples and supporting details
+            - Key concepts and definitions
+            
+            ## Summary (Bottom)
+            - Brief summary of the main points
+            - Key takeaways
+            
+            Content:
+            ${content}`;
+          break;
 
-    const prompt = `Generate detailed study notes for the following text${focus ? ` focusing on ${focus}` : ''}. 
-    Format the notes in markdown with:
-    - Clear hierarchical headings
-    - Bullet points for key concepts
-    - Bold text for important terms
-    - Numbered lists for steps or sequences
-    - Brief summary at the end
+        case 'flowchart':
+          prompt = `Create a flowchart-style note representation of the following content.
+            ${focus ? `Focus on: ${focus}` : ''}
+            ${description ? `Additional requirements: ${description}` : ''}
+            
+            Format the notes as a flowchart using markdown and ASCII characters:
+            - Use --> for connections
+            - Use [ ] for main concepts
+            - Use ( ) for supporting details
+            - Use * for important notes
+            - Show clear relationships and process flows
+            - Include brief explanations at each node
+            
+            Content:
+            ${content}`;
+          break;
 
-    Content to analyze:
-    ${content}
+        case 'bullet':
+          prompt = `Create detailed bullet-point notes from the following content.
+            ${focus ? `Focus on: ${focus}` : ''}
+            ${description ? `Additional requirements: ${description}` : ''}
+            
+            Format the notes with:
+            - Main topics as headers (##)
+            - Hierarchical bullet points (-, *, +)
+            - Important terms in **bold**
+            - Key definitions and examples
+            - Clear subtopics and relationships
+            
+            Content:
+            ${content}`;
+          break;
 
-    Please ensure the notes are well-structured and academically focused.`;
+        case 'paragraph':
+          prompt = `Create well-structured paragraph notes from the following content.
+            ${focus ? `Focus on: ${focus}` : ''}
+            ${description ? `Additional requirements: ${description}` : ''}
+            
+            Format the notes with:
+            - Clear topic paragraphs
+            - Section headers (##)
+            - Important terms in **bold**
+            - Topic sentences
+            - Supporting details
+            - Connecting ideas between paragraphs
+            - Concluding statements
+            
+            Content:
+            ${content}`;
+          break;
+
+        default:
+          prompt = `Create detailed study notes from the following content.
+            ${focus ? `Focus on: ${focus}` : ''}
+            ${description ? `Additional requirements: ${description}` : ''}
+            
+            Format the notes with:
+            - Clear headings and subheadings
+            - Bullet points for key concepts
+            - Examples where relevant
+            - Important definitions
+            Use markdown formatting.
+            
+            Content:
+            ${content}`;
+      }
+    }
 
     const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const notes = response.text();
-
-    console.log('Successfully generated notes');
-    return NextResponse.json({ notes });
+    const response = result.response.text();
+    
+    return NextResponse.json({ 
+      [type === 'summary' ? 'summary' : 'notes']: response,
+      style: style
+    });
 
   } catch (error) {
-    console.error('Error generating notes:', error);
+    console.error('Error in gen_notes POST route:', error);
     return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : 'An error occurred',
-        details: error instanceof Error ? error.stack : undefined
-      },
+      { error: error instanceof Error ? error.message : 'Failed to generate notes' },
       { status: 500 }
     );
-  }
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const documentId = searchParams.get('documentId');
-
-  if (!documentId) {
-    return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
-  }
-
-  try {
-    const processingStatus = await getProcessingStatus(documentId);
-    return NextResponse.json({ status: processingStatus });
-  } catch (error) {
-    console.error('Error getting notes status:', error);
-    return NextResponse.json({ error: 'Failed to get notes status' }, { status: 500 });
   }
 }
