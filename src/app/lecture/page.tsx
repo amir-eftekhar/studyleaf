@@ -1,371 +1,385 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { motion } from 'framer-motion';
-import { Mic, StopCircle, FileText, List, AlignLeft, Grid3X3, Upload } from 'lucide-react';
-import { Button } from "@/components/ui/button";
+import React, { useState, useRef, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Loader2, Upload, FileAudio, FileText, Brain, Download, Mic, StopCircle } from 'lucide-react';
+import MainLayout from '@/components/layout/MainLayout';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import axios from 'axios';
-import Image from 'next/image';
-import Link from 'next/link';
-import logoSrc from '../img/logo.svg';
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useToast } from '@/components/ui/use-toast';
 
-declare global {
-  interface Window {
-    SpeechRecognition: any;
-    webkitSpeechRecognition: any;
-  }
-}
+type NoteType = 'summary' | 'detailed' | 'outline' | 'cornell';
 
-interface Notes {
-  paragraph: string[];
-  bulletPoints: string[];
-  cornell: {
-    notes: string[];
-    cues: string[];
-    summary: string[];
-  };
-}
-
-export default function EnhancedLectureNotes() {
+export default function LecturePage() {
+  const { toast } = useToast();
+  const [file, setFile] = useState<File | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [notes, setNotes] = useState('');
+  const [generatedNotes, setGeneratedNotes] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState('upload');
+  const [progress, setProgress] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
-  const [lectureId, setLectureId] = useState('');
-  const [liveTranscript, setLiveTranscript] = useState('');
-  const [notes, setNotes] = useState<Notes>({
-    paragraph: [],
-    bulletPoints: [],
-    cornell: { notes: [], cues: [], summary: [] },
-  });
-  const recognitionRef = useRef<any>(null);
-  const transcriptBufferRef = useRef('');
-  const [isProcessingAudio, setIsProcessingAudio] = useState(false);
-  const audioInputRef = useRef<HTMLInputElement>(null);
-
-  const generateStreamingNotes = useCallback(async (text: string) => {
-    try {
-      if (!text.trim()) {
-        console.log('Empty text, skipping note generation.');
-        return;
-      }
-      const response = await axios.post('/api/lecture_notes', {
-        lectureId,
-        text,
-        config: { style: 'all' },
-        isNewChunk: true
-      });
-
-      const { notes: apiNotes } = response.data;
-
-      if (apiNotes) {
-        setNotes(prev => ({
-          paragraph: [...prev.paragraph, apiNotes.paragraph || ''],
-          bulletPoints: [...prev.bulletPoints, apiNotes.bullet || ''],
-          cornell: {
-            notes: [...prev.cornell.notes, apiNotes.cornell?.notes || ''],
-            cues: [...prev.cornell.cues, apiNotes.cornell?.cues || ''],
-            summary: [...prev.cornell.summary, apiNotes.cornell?.summary || ''],
-          },
-        }));
-      }
-    } catch (error) {
-      console.error('Error generating streaming notes:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        console.error('Server response:', error.response.data);
-      }
-    }
-  }, [lectureId]);
+  const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
+  const [noteType, setNoteType] = useState<NoteType>('detailed');
+  const [selectedNoteType, setSelectedNoteType] = useState<NoteType>('detailed');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
-    setLectureId(Date.now().toString());
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.error('Speech recognition not supported in this browser.');
-      return;
-    }
-
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true;
-    recognitionRef.current.lang = 'en-US';
-
-    recognitionRef.current.onstart = () => {
-      console.log('Speech recognition started.');
-    };
-
-    recognitionRef.current.onresult = (event: any) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript;
-        } else {
-          interimTranscript += transcript;
-        }
-      }
-
-      setLiveTranscript(prev => prev + finalTranscript + interimTranscript);
-      transcriptBufferRef.current += finalTranscript;
-
-      if (finalTranscript.trim()) {
-        generateStreamingNotes(transcriptBufferRef.current);
-        transcriptBufferRef.current = '';
-      }
-    };
-
-    recognitionRef.current.onerror = (event: any) => {
-      console.error('Speech recognition error:', event.error);
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setIsRecording(false);
-      }
-    };
-
-    recognitionRef.current.onend = () => {
-      console.log('Speech recognition ended.');
-      if (isRecording) {
-        console.log('Restarting speech recognition.');
-        try {
-          recognitionRef.current.start();
-        } catch (error) {
-          console.error('Error restarting speech recognition:', error);
-        }
-      }
-    };
-
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-        recognitionRef.current = null;
+      if (mediaRecorderRef.current && isRecording) {
+        mediaRecorderRef.current.stop();
       }
     };
-  }, [isRecording, generateStreamingNotes]);
+  }, [isRecording]);
 
-  const toggleRecording = async () => {
-    if (!isRecording) {
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        setFile(new File([audioBlob], 'recorded-lecture.wav', { type: 'audio/wav' }));
+        setActiveTab('process');
+      };
+
+      mediaRecorder.start();
       setIsRecording(true);
-      setLiveTranscript('');
-      clearNotes();
-      transcriptBufferRef.current = '';
-      if (recognitionRef.current) {
-        try {
-          await recognitionRef.current.start();
-          console.log('Recording started.');
-        } catch (error) {
-          console.error('Error starting recording:', error);
-          setIsRecording(false);
-        }
-      }
-    } else {
+    } catch (err) {
+      console.error('Error accessing microphone:', err);
+      setError('Could not access microphone. Please check permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
       setIsRecording(false);
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-          console.log('Recording stopped.');
-        } catch (error) {
-          console.error('Error stopping recording:', error);
-        }
-      }
-      // Generate final notes from any remaining transcript
-      if (transcriptBufferRef.current.trim()) {
-        await generateStreamingNotes(transcriptBufferRef.current);
-        transcriptBufferRef.current = '';
-      }
+      const tracks = mediaRecorderRef.current.stream.getTracks();
+      tracks.forEach(track => track.stop());
     }
   };
 
-  const clearNotes = () => {
-    setNotes({
-      paragraph: [],
-      bulletPoints: [],
-      cornell: { notes: [], cues: [], summary: [] },
-    });
-    setLiveTranscript('');
-  };
-
-  const copyNotes = () => {
-    const notesText = JSON.stringify(notes, null, 2);
-    navigator.clipboard.writeText(notesText)
-      .then(() => alert('Notes copied to clipboard!'))
-      .catch(err => console.error('Failed to copy notes:', err));
-  };
-
-  const saveNotes = () => {
-    try {
-      localStorage.setItem(`lecture_${lectureId}_notes`, JSON.stringify(notes));
-      alert('Notes saved to local storage!');
-    } catch (error) {
-      console.error('Error saving notes:', error);
-      alert('Failed to save notes.');
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0]);
+      setError('');
+      setActiveTab('process');
     }
   };
 
-  const handleAudioUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsProcessingAudio(true);
-    const formData = new FormData();
-    formData.append('audio', file);
-
+  const processAudio = async (audioBlob: Blob) => {
+    setIsProcessing(true);
+    setError('');
+    
     try {
-      const response = await axios.post('/api/transcribe_audio', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      // Create form data with the audio file
+      const formData = new FormData();
+      formData.append('file', audioBlob);
+
+      // Get transcription
+      const transcribeRes = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
       });
 
-      const { transcript } = response.data;
-      setLiveTranscript(transcript);
-      await generateStreamingNotes(transcript);
-    } catch (error) {
-      console.error('Error processing audio file:', error);
-      alert('Failed to process audio file. Please try again.');
+      if (!transcribeRes.ok) {
+        const error = await transcribeRes.json();
+        throw new Error(error.error || 'Failed to transcribe audio');
+      }
+
+      const { transcript } = await transcribeRes.json();
+
+      // Generate notes from transcription
+      const notesRes = await fetch('/api/lecture_notes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transcript,
+          noteType: selectedNoteType,
+        }),
+      });
+
+      if (!notesRes.ok) {
+        const error = await notesRes.json();
+        throw new Error(error.error || 'Failed to generate notes');
+      }
+
+      const { notes } = await notesRes.json();
+
+      // Save the notes
+      const saveRes = await fetch('/api/save-notes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: `Lecture Notes - ${new Date().toLocaleDateString()}`,
+          content: notes,
+          noteType: selectedNoteType,
+          transcript,
+        }),
+      });
+
+      if (!saveRes.ok) {
+        console.error('Failed to save notes:', await saveRes.json());
+        toast({
+          title: "Warning",
+          description: "Notes generated but failed to save. You can still download them.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Success!",
+          description: "Your notes have been generated and saved.",
+          variant: "default",
+        });
+      }
+
+      setGeneratedNotes(notes);
+      setActiveTab('results');
+    } catch (err) {
+      console.error('Processing error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to process audio');
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : 'Failed to process audio',
+        variant: "destructive",
+      });
     } finally {
-      setIsProcessingAudio(false);
+      setIsProcessing(false);
     }
+  };
+
+  const downloadNotes = () => {
+    const element = document.createElement('a');
+    const file = new Blob([generatedNotes], {type: 'text/plain'});
+    element.href = URL.createObjectURL(file);
+    element.download = `lecture-notes-${selectedNoteType}.txt`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 p-8">
-      <header className="fixed top-0 left-0 right-0 z-10 bg-gradient-to-r from-purple-100 to-indigo-100 shadow-md mb-8">
-        <div className="max-w-7xl mx-auto py-4">
-          <Link href="/" className="flex items-center text-2xl font-bold text-indigo-600">
-            <Image src={logoSrc} alt="StudyLeaf Logo" width={32} height={32} className="mr-2" />
-            StudyLeaf
-          </Link>
+    <MainLayout>
+      <div className="container mx-auto p-4 max-w-6xl">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold">Lecture Notes Generator</h1>
+          <p className="text-muted-foreground mt-2">
+            Record or upload your lecture and get AI-generated notes
+          </p>
         </div>
-      </header>
-      
-      {!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) && (
-        <div className="text-red-500 mb-4">
-          Your browser does not support speech recognition. Please use a supported browser like Google Chrome.
-        </div>
-      )}
 
-      <div className="flex space-x-4 mt-20">
-        <Card className="w-1/3">
-          <CardContent className="p-6">
-            <h2 className="text-2xl font-bold mb-4">Live Transcript</h2>
-            <div className="bg-white p-4 rounded-lg shadow-inner h-[70vh] overflow-y-auto">
-              <p>{liveTranscript}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="w-2/3">
-          <CardContent className="p-6">
-            <h1 className="text-3xl font-bold mb-6 text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
-              Lecture Notes
-            </h1>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="upload" disabled={isLoading}>
+              <Upload className="w-4 h-4 mr-2" />
+              Upload
+            </TabsTrigger>
+            <TabsTrigger value="process" disabled={!file || isLoading}>
+              <Brain className="w-4 h-4 mr-2" />
+              Process
+            </TabsTrigger>
+            <TabsTrigger value="results" disabled={!generatedNotes}>
+              <FileText className="w-4 h-4 mr-2" />
+              Results
+            </TabsTrigger>
+          </TabsList>
 
-            <div className="flex justify-center space-x-4 mb-8">
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Button
-                  onClick={toggleRecording}
-                  className={`w-16 h-16 rounded-full ${isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-                  aria-label={isRecording ? "Stop recording" : "Start recording"}
-                  disabled={isProcessingAudio}
-                >
-                  {isRecording ? <StopCircle className="h-8 w-8" /> : <Mic className="h-8 w-8" />}
-                </Button>
-              </motion.div>
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Button
-                  onClick={() => audioInputRef.current?.click()}
-                  className="w-16 h-16 rounded-full bg-green-500 hover:bg-green-600"
-                  aria-label="Upload audio file"
-                  disabled={isRecording || isProcessingAudio}
-                >
-                  <Upload className="h-8 w-8" />
-                </Button>
-                <input
-                  type="file"
-                  ref={audioInputRef}
-                  onChange={handleAudioUpload}
-                  accept="audio/*"
-                  className="hidden"
-                />
-              </motion.div>
-            </div>
-            <p className="text-center mb-8">
-              {isRecording ? 'Recording in progress... Click to stop' : 
-               isProcessingAudio ? 'Processing audio file...' : 
-               'Click to start recording or upload an audio file'}
-            </p>
+          <TabsContent value="upload">
+            <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Record Lecture</CardTitle>
+                  <CardDescription>
+                    Record your lecture directly using your microphone
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 space-y-4">
+                    {isRecording ? (
+                      <StopCircle className="w-12 h-12 text-red-500 animate-pulse" />
+                    ) : (
+                      <Mic className="w-12 h-12 text-muted-foreground" />
+                    )}
+                    <Button
+                      onClick={isRecording ? stopRecording : startRecording}
+                      variant={isRecording ? "ghost" : "solid"}
+                      className="w-full max-w-xs"
+                    >
+                      {isRecording ? 'Stop Recording' : 'Start Recording'}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
 
-            <Tabs defaultValue="paragraph" className="w-full">
-              <TabsList className="grid w-full grid-cols-4 mb-4">
-                <TabsTrigger value="paragraph" className="flex items-center"><AlignLeft className="mr-2 h-4 w-4" /> Paragraph</TabsTrigger>
-                <TabsTrigger value="bulletPoints" className="flex items-center"><List className="mr-2 h-4 w-4" /> Bullet Points</TabsTrigger>
-                <TabsTrigger value="cornell" className="flex items-center"><Grid3X3 className="mr-2 h-4 w-4" /> Cornell</TabsTrigger>
-                <TabsTrigger value="raw" className="flex items-center"><FileText className="mr-2 h-4 w-4" /> Raw</TabsTrigger>
-              </TabsList>
-              <TabsContent value="paragraph">
-                <div className="bg-white p-4 rounded-lg shadow-inner min-h-[50vh] overflow-y-auto">
-                  {notes.paragraph.map((para, index) => (
-                    <p key={index}>{para}</p>
-                  ))}
-                </div>
-              </TabsContent>
-              <TabsContent value="bulletPoints">
-                <div className="bg-white p-4 rounded-lg shadow-inner min-h-[50vh] overflow-y-auto">
-                  <ul className="list-disc list-inside">
-                    {notes.bulletPoints.map((point, index) => (
-                      <li key={index}>{point}</li>
-                    ))}
-                  </ul>
-                </div>
-              </TabsContent>
-              <TabsContent value="cornell">
-                <div className="grid grid-cols-3 gap-4 min-h-[50vh]">
-                  <div className="col-span-2 space-y-4">
-                    <div className="bg-white p-4 rounded-lg shadow-inner h-[30vh] overflow-y-auto">
-                      <h3 className="font-semibold mb-2">Notes</h3>
-                      {notes.cornell.notes.map((note, index) => (
-                        <p key={index}>{note}</p>
-                      ))}
-                    </div>
-                    <div className="bg-white p-4 rounded-lg shadow-inner h-[20vh] overflow-y-auto">
-                      <h3 className="font-semibold mb-2">Summary</h3>
-                      {notes.cornell.summary.map((summary, index) => (
-                        <p key={index}>{summary}</p>
-                      ))}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Upload Recording</CardTitle>
+                  <CardDescription>
+                    Select an audio or video file of your lecture
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 space-y-4">
+                    <FileAudio className="w-12 h-12 text-muted-foreground" />
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground mb-2">
+                        Drag and drop your file here, or click to browse
+                      </p>
+                      <Input
+                        type="file"
+                        accept="audio/*,video/*"
+                        onChange={handleFileChange}
+                        className="max-w-xs"
+                      />
                     </div>
                   </div>
-                  <div className="bg-white p-4 rounded-lg shadow-inner h-[50vh] overflow-y-auto">
-                    <h3 className="font-semibold mb-2">Cues</h3>
-                    {notes.cornell.cues.map((cue, index) => (
-                      <p key={index}>{cue}</p>
-                    ))}
-                  </div>
-                </div>
-              </TabsContent>
-              <TabsContent value="raw">
-                <Textarea
-                  value={JSON.stringify(notes, null, 2)}
-                  readOnly
-                  className="min-h-[50vh] font-mono text-sm"
-                />
-              </TabsContent>
-            </Tabs>
-
-            <div className="flex justify-end space-x-4 mt-6">
-              <Button variant="outline" onClick={clearNotes}>
-                Clear
-              </Button>
-              <Button variant="outline" onClick={copyNotes}>
-                Copy
-              </Button>
-              <Button onClick={saveNotes}>
-                Save
-              </Button>
+                  {file && (
+                    <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
+                      <div className="flex items-center space-x-4">
+                        <FileAudio className="w-6 h-6" />
+                        <div>
+                          <p className="font-medium">{file.name}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {(file.size / (1024 * 1024)).toFixed(2)} MB
+                          </p>
+                        </div>
+                      </div>
+                      <Badge variant="secondary">Ready to Process</Badge>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
-          </CardContent>
-        </Card>
+          </TabsContent>
+
+          <TabsContent value="process">
+            <Card>
+              <CardHeader>
+                <CardTitle>Process Recording</CardTitle>
+                <CardDescription>
+                  Choose note type and generate transcript and notes
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {error && (
+                  <div className="bg-destructive/10 text-destructive px-4 py-2 rounded-lg">
+                    {error}
+                  </div>
+                )}
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Note Type</label>
+                    <Select value={selectedNoteType} onValueChange={(value: NoteType) => setSelectedNoteType(value)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select note type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="summary">Summary Notes</SelectItem>
+                        <SelectItem value="detailed">Detailed Notes</SelectItem>
+                        <SelectItem value="outline">Outline Format</SelectItem>
+                        <SelectItem value="cornell">Cornell Notes</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    onClick={() => processAudio(file as Blob)}
+                    disabled={!file || isLoading}
+                    className="w-full"
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Processing
+                      </>
+                    ) : (
+                      <>
+                        <Brain className="mr-2 h-4 w-4" />
+                        Start Processing
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="results">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card className="h-[600px]">
+                <CardHeader>
+                  <CardTitle>Transcript</CardTitle>
+                  <CardDescription>
+                    Raw transcript from your lecture recording
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ScrollArea className="h-[450px] w-full rounded-md border p-4">
+                    <div className="whitespace-pre-wrap">
+                      {transcript || 'No transcript available'}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+
+              <Card className="h-[600px]">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <div>
+                    <CardTitle>Generated Notes</CardTitle>
+                    <CardDescription>
+                      AI-generated {selectedNoteType} notes from your lecture
+                    </CardDescription>
+                  </div>
+                  {generatedNotes && (
+                    <Button variant="ghost" className="w-8 h-8 p-0" onClick={downloadNotes}>
+                      <Download className="h-4 w-4" />
+                    </Button>
+                  )}
+                </CardHeader>
+                <CardContent>
+                  <ScrollArea className="h-[450px] w-full rounded-md border p-4">
+                    <div className="whitespace-pre-wrap prose prose-sm max-w-none">
+                      {generatedNotes || 'No notes available'}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
-    </div>
+    </MainLayout>
   );
 }

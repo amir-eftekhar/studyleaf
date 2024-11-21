@@ -1,0 +1,8 @@
+# Workbox service worker files
+public/workbox-*.js
+public/sw.js
+public/sw.js.map
+
+# Other build files
+.next
+node_modules 

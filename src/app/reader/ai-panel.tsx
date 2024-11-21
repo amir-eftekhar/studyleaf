@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { MessageSquare, BookOpen, HelpCircle, Paperclip, Send, Edit2, Save, RefreshCw, Image as ImageIcon } from 'lucide-react'
+import { FiMessageSquare, FiBook, FiHelpCircle, FiPaperclip, FiSend, FiEdit2, FiSave, FiRefreshCw, FiImage, FiZoomIn, FiZoomOut, FiMaximize, FiMinimize, FiRotateCw, FiDownload, FiShare2, FiMoreVertical, FiX, FiChevronLeft, FiChevronRight, FiLoader } from 'react-icons/fi';
 import axios from 'axios'
 import { InlineMath, BlockMath } from 'react-katex'
 import 'katex/dist/katex.min.css'
@@ -22,6 +22,10 @@ import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { debounce } from 'lodash'
+import { useToast } from "@/components/ui/use-toast"
+import { Loader2 } from "lucide-react"
+import { cn } from '@/lib/utils';
+import Markdown from 'react-markdown';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -107,7 +111,80 @@ interface SearchResult {
   page: number;
 }
 
-export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl: string | null, currentPage: number, totalPages: number }) {
+interface PDFAIPanelProps {
+  pdfUrl: string | null;
+  pdfContent: string;
+  currentPage: number;
+  totalPages: number;
+  theme?: string;
+  onClose: () => void;
+  onFileUpload: (path: string) => void;
+}
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const GeneratingAnimation = () => (
+  <div className="flex items-center space-x-3 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 rounded-xl shadow-sm">
+    <div className="flex space-x-2">
+      <motion.div
+        className="w-3 h-3 rounded-full bg-gradient-to-r from-purple-500 to-indigo-500"
+        animate={{
+          scale: [1, 1.2, 1],
+          opacity: [1, 0.7, 1]
+        }}
+        transition={{
+          duration: 1,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+      />
+      <motion.div
+        className="w-3 h-3 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500"
+        animate={{
+          scale: [1, 1.2, 1],
+          opacity: [1, 0.7, 1]
+        }}
+        transition={{
+          duration: 1,
+          repeat: Infinity,
+          ease: "easeInOut",
+          delay: 0.2
+        }}
+      />
+      <motion.div
+        className="w-3 h-3 rounded-full bg-gradient-to-r from-purple-500 to-indigo-500"
+        animate={{
+          scale: [1, 1.2, 1],
+          opacity: [1, 0.7, 1]
+        }}
+        transition={{
+          duration: 1,
+          repeat: Infinity,
+          ease: "easeInOut",
+          delay: 0.4
+        }}
+      />
+    </div>
+    <span className="text-sm font-medium bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-400 dark:to-indigo-400 bg-clip-text text-transparent">
+      AI is thinking...
+    </span>
+  </div>
+);
+
+const PDFAIPanel: React.FC<PDFAIPanelProps> = ({ 
+  pdfUrl, 
+  pdfContent, 
+  currentPage, 
+  totalPages,
+  theme = 'light',
+  onClose,
+  onFileUpload
+}) => {
+  const { toast } = useToast()
+  const [mounted, setMounted] = useState(false);
   const [activePanel, setActivePanel] = useState<string | null>(null)
   const [chatMessages, setChatMessages] = useState<{ role: string; content: string }[]>([])
   const [inputMessage, setInputMessage] = useState('')
@@ -116,9 +193,7 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [selectedAnswer, setSelectedAnswer] = useState('')
-  const chatContainerRef = useRef<HTMLDivElement>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
   const [streamingContent, setStreamingContent] = useState('')
   const [quizResults, setQuizResults] = useState<QuizResult[]>([])
   const [showResults, setShowResults] = useState(false)
@@ -131,57 +206,235 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
     difficulty: 'medium',
     focus: '',
     pageRange: [1, totalPages],
-  });
-  const [quizAnswers, setQuizAnswers] = useState<Record<number, string>>({});
-  const [quizFeedback, setQuizFeedback] = useState<string>('');
-  const [detailedQuizFeedback, setDetailedQuizFeedback] = useState<DetailedQuizFeedback[]>([]);
-  const [notesFocus, setNotesFocus] = useState('');
-  const [quizPageRange, setQuizPageRange] = useState<[number, number]>([1, totalPages]);
-  const [notesPageRange, setNotesPageRange] = useState<[number, number]>([currentPage, currentPage]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  })
+  const [quizAnswers, setQuizAnswers] = useState<Record<number, string>>({})
+  const [quizFeedback, setQuizFeedback] = useState<string>('')
+  const [detailedQuizFeedback, setDetailedQuizFeedback] = useState<DetailedQuizFeedback[]>([])
+  const [notesFocus, setNotesFocus] = useState('')
+  const [quizPageRange, setQuizPageRange] = useState<[number, number]>([1, totalPages])
+  const [notesPageRange, setNotesPageRange] = useState<[number, number]>([currentPage, currentPage])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [isEmbedding, setIsEmbedding] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [isPanelVisible, setIsPanelVisible] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [isVectorized, setIsVectorized] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingStatus, setProcessingStatus] = useState<'pending' | 'processing' | 'completed' | 'error'>('pending');
+  const [isPollingStatus, setIsPollingStatus] = useState(false);
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+  const [streamingResponse, setStreamingResponse] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [notesDescription, setNotesDescription] = useState('');
+  const [summaryDescription, setSummaryDescription] = useState('');
+  const [summaryPageRange, setSummaryPageRange] = useState<[number, number]>([currentPage, currentPage]);
+  const [summaryFocus, setSummaryFocus] = useState('');
 
-  const debouncedSearch = useCallback(
-    debounce(async (query: string) => {
-      if (query.trim() === '') {
-        setSearchResults([]);
+  const chatContainerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const handleRagChat = useCallback(async () => {
+    if (!pdfUrl || !pdfContent) {
+      console.log('Missing required data:', { pdfUrl, hasPdfContent: !!pdfContent });
+      toast({
+        title: "Error",
+        description: "No document selected or content available",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!inputMessage.trim()) {
+      console.log('No message entered');
+      toast({
+        title: "Error",
+        description: "Please enter a message",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsLoading(true);
+    setMessages(prev => [...prev, { role: 'user', content: inputMessage }]);
+
+    try {
+      // Extract just the filename part after /uploads/
+      const match = pdfUrl.match(/\/uploads\/(.+)$/);
+      const documentId = match ? match[1] : pdfUrl;
+      
+      console.log('Starting chat process:', { 
+        documentId, 
+        messageLength: inputMessage.length,
+        currentMessages: messages.length 
+      });
+
+      // First, check if document is processed
+      const statusResponse = await fetch(`/api/processing-status?documentId=${encodeURIComponent(documentId)}`);
+      const statusData = await statusResponse.json();
+      console.log('Document status:', statusData);
+
+      // If not processed, process it first
+      if (!statusData || statusData.status !== 'completed') {
+        console.log('Processing document first...');
+        const processResponse = await fetch('/api/rag_chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            documentId,
+            content: pdfContent
+          }),
+        });
+
+        if (!processResponse.ok) {
+          throw new Error('Failed to process document');
+        }
+
+        const processResult = await processResponse.json();
+        console.log('Processing result:', processResult);
+      }
+
+      // Now send the chat message
+      console.log('Sending chat message...');
+      const chatResponse = await fetch('/api/rag_chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentId,
+          message: inputMessage
+        }),
+      });
+
+      if (!chatResponse.ok) {
+        const errorData = await chatResponse.json();
+        console.error('Chat error response:', errorData);
+        throw new Error(errorData.error || 'Failed to get response');
+      }
+
+      const data = await chatResponse.json();
+      console.log('Chat response received:', data);
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      if (data.response) {
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: data.response 
+        }]);
+        setInputMessage('');
+      }
+
+    } catch (error) {
+      console.error('Error in chat:', error);
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: 'I apologize, but I encountered an error. Please try again.' 
+      }]);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to get response. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [pdfUrl, inputMessage, messages, toast, pdfContent]);
+
+  const checkAndProcessDocument = async () => {
+    if (!pdfUrl) return;
+
+    try {
+      // Extract just the filename part after /uploads/
+      const match = pdfUrl.match(/\/uploads\/(.+)$/);
+      const documentId = match ? match[1] : pdfUrl;
+      
+      const response = await fetch(`/api/processing-status?documentId=${encodeURIComponent(pdfUrl)}`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to check status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Processing status:', data);
+
+      if (data.status === 'completed') {
+        setIsProcessing(false);
+        setIsVectorized(true);
+        setProcessingStatus('completed');
         return;
       }
-      try {
-        const response = await axios.post('/api/search', { query, pdfUrl });
-        setSearchResults(response.data.results);
-      } catch (error) {
-        console.error('Error searching:', error);
+
+      // If not completed, start processing
+      console.log('Document needs processing first');
+      
+      const processResponse = await fetch('/api/rag_chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentId,
+          content: pdfContent // Make sure to include the content for processing
+        }),
+      });
+
+      if (!processResponse.ok) {
+        throw new Error('Failed to process document');
       }
+
+      setIsProcessing(true);
+      setProcessingStatus('processing');
+
+    } catch (error) {
+      console.error('Error checking/processing document:', error);
+      setError(error instanceof Error ? error.message : 'Failed to process document');
+      setIsProcessing(false);
+      setProcessingStatus('error');
+    }
+  };
+
+  // Check status only once when component mounts or pdfUrl changes
+  useEffect(() => {
+    if (pdfUrl) {
+      checkAndProcessDocument();
+    }
+  }, [pdfUrl]);
+
+  const addMessage = useCallback((message: Message) => {
+    setMessages(prev => [...prev, message]);
+  }, []);
+
+  const debouncedSearch = useCallback(
+    debounce((query: string) => {
+      if (query.trim() === '') {
+        setSearchResults([])
+        return
+      }
+      const searchPdf = async () => {
+        try {
+          const response = await axios.post('/api/search', { query, pdfUrl })
+          setSearchResults(response.data.results)
+        } catch (error) {
+          console.error('Error searching:', error)
+        }
+      }
+      searchPdf()
     }, 300),
     [pdfUrl]
-  );
+  )
 
   useEffect(() => {
-    debouncedSearch(searchQuery);
-  }, [searchQuery, debouncedSearch]);
+    setMounted(true)
+  }, [])
 
-  const SearchBar = () => (
-    <div className="relative w-full mb-4">
-      <input
-        type="text"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder="Search in document..."
-        className="w-full p-2 border border-gray-300 rounded-md"
-      />
-      {searchResults.length > 0 && (
-        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
-          {searchResults.map((result, index) => (
-            <div key={index} className="p-2 hover:bg-gray-100 cursor-pointer">
-              <p className="text-sm">{result.content}</p>
-              <p className="text-xs text-gray-500">Page: {result.page}</p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  useEffect(() => {
+    debouncedSearch(searchQuery)
+    return () => {
+      debouncedSearch.cancel()
+    }
+  }, [searchQuery, debouncedSearch])
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -189,55 +442,40 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
     }
   }, [chatMessages, streamingContent])
 
-  const handleRagChat = useCallback(async () => {
-    if (inputMessage.trim()) {
-      setIsLoading(true);
-      setChatMessages(prev => [...prev, { role: 'user', content: inputMessage }]);
-      setStreamingContent('');
-      try {
-        const response = await axios.post('/api/RAG', {
-          question: inputMessage,
-          content: pdfUrl,
-          documentId: pdfUrl,
-          fileType: 'pdf'
-        });
-        const answer = response.data.answer;
-        
-        // Increase streaming speed (2.5x faster)
-        for (let i = 0; i < answer.length; i += 2) {
-          await new Promise(resolve => setTimeout(resolve, 4)); // Reduced delay
-          setStreamingContent(prev => prev + answer.slice(i, i + 2));
-        }
-        
-        setChatMessages(prev => [...prev, { role: 'assistant', content: answer }]);
-        setStreamingContent('');
-      } catch (error) {
-        console.error('Error in RAG chat:', error);
-        setChatMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, an error occurred. Please try again.' }]);
-      } finally {
-        setIsLoading(false);
-        setInputMessage('');
-      }
-    }
-  }, [inputMessage, pdfUrl]);
-
-  const handleGenerateNotes = useCallback(async () => {
-    setIsLoading(true)
+  const handleGenerateNotes = async () => {
+    if (!pdfUrl) return;
+    
+    setIsLoading(true);
     try {
-      const response = await axios.post('/api/gen_notes', {
-        pdfUrl,
-        pageRange: notesPageRange,
-        focus: notesFocus
-      })
-      setNotes(response.data.notes)
-      setIsEditingNotes(true)
+      const response = await fetch('/api/gen_notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentId: pdfUrl,
+          pageRange: notesPageRange,
+          focus: notesFocus,
+          description: notesDescription
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate notes');
+      }
+      
+      const data = await response.json();
+      setNotes(data.notes);
     } catch (error) {
-      console.error('Error generating notes:', error)
-      setNotes('An error occurred while generating notes. Please try again.')
+      console.error('Error generating notes:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate notes. Please try again.",
+        variant: "destructive",
+      });
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }, [pdfUrl, notesPageRange, notesFocus])
+  };
 
   const handleStartQuiz = useCallback(async () => {
     setIsLoading(true);
@@ -320,50 +558,69 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
     });
   }, [totalPages]);
 
-  const PageRangeInputs = ({ value, onChange, min, max }: { value: [number, number], onChange: (value: [number, number]) => void, min: number, max: number }) => {
+  const PageRangeInputs = ({ value, onChange, min, max }: { 
+    value: [number, number], 
+    onChange: (value: [number, number]) => void, 
+    min: number, 
+    max: number 
+  }) => {
+    const handleStartPageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newStart = Math.min(Math.max(parseInt(e.target.value) || min, min), max);
+      onChange([newStart, Math.max(newStart, value[1])]);
+    };
+
+    const handleEndPageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newEnd = Math.min(Math.max(parseInt(e.target.value) || min, min), max);
+      onChange([Math.min(value[0], newEnd), newEnd]);
+    };
+
     return (
       <div className="flex items-center space-x-2">
         <Input
           type="number"
           value={value[0]}
-          onChange={(e) => onChange([Math.max(min, Math.min(max, parseInt(e.target.value))), value[1]])}
+          onChange={handleStartPageChange}
           min={min}
           max={max}
-          className="w-20"
+          className="w-24 bg-gray-800 text-white border-gray-700 focus:ring-purple-500"
         />
-        <span>to</span>
+        <span className="text-white">to</span>
         <Input
           type="number"
           value={value[1]}
-          onChange={(e) => onChange([value[0], Math.max(min, Math.min(max, parseInt(e.target.value)))])}
+          onChange={handleEndPageChange}
           min={min}
           max={max}
-          className="w-20"
+          className="w-24 bg-gray-800 text-white border-gray-700 focus:ring-purple-500"
         />
       </div>
     );
   };
 
   const renderQuizConfig = () => (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
       <div>
-        <Label>Number of Questions</Label>
+        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Number of Questions</Label>
         <div className="grid grid-cols-3 gap-4 mt-2">
           <div>
-            <Label>Multiple Choice</Label>
+            <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Multiple Choice</Label>
             <Input
               type="number"
               value={quizConfig.numQuestions.multiple_choice}
               onChange={(e) => setQuizConfig(prev => ({
                 ...prev,
-                numQuestions: { ...prev.numQuestions, multiple_choice: parseInt(e.target.value) }
+                numQuestions: { ...prev.numQuestions, multiple_choice: parseInt(e.target.value) || 0 }
               }))}
               min={0}
-              className="mt-1"
+              className={`mt-1 ${
+                theme === 'dark' 
+                  ? 'bg-gray-800 text-white border-gray-700' 
+                  : 'bg-white text-gray-900 border-gray-200'
+              }`}
             />
           </div>
           <div>
-            <Label>Free Response</Label>
+            <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Free Response</Label>
             <Input
               type="number"
               value={quizConfig.numQuestions.free_response}
@@ -372,11 +629,15 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
                 numQuestions: { ...prev.numQuestions, free_response: parseInt(e.target.value) }
               }))}
               min={0}
-              className="mt-1"
+              className={`mt-1 ${
+                theme === 'dark' 
+                  ? 'bg-gray-800 text-white border-gray-700' 
+                  : 'bg-white text-gray-900 border-gray-200'
+              }`}
             />
           </div>
           <div>
-            <Label>True/False</Label>
+            <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>True/False</Label>
             <Input
               type="number"
               value={quizConfig.numQuestions.true_false}
@@ -385,13 +646,17 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
                 numQuestions: { ...prev.numQuestions, true_false: parseInt(e.target.value) }
               }))}
               min={0}
-              className="mt-1"
+              className={`mt-1 ${
+                theme === 'dark' 
+                  ? 'bg-gray-800 text-white border-gray-700' 
+                  : 'bg-white text-gray-900 border-gray-200'
+              }`}
             />
           </div>
         </div>
       </div>
       <div>
-        <Label>Difficulty</Label>
+        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Difficulty</Label>
         <RadioGroup
           value={quizConfig.difficulty}
           onValueChange={(value) => setQuizConfig(prev => ({ ...prev, difficulty: value as 'easy' | 'medium' | 'hard' }))}
@@ -412,7 +677,7 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
         </RadioGroup>
       </div>
       <div>
-        <Label>Focus (Optional)</Label>
+        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Focus (Optional)</Label>
         <Input
           value={quizConfig.focus}
           onChange={(e) => setQuizConfig(prev => ({ ...prev, focus: e.target.value }))}
@@ -421,7 +686,7 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
         />
       </div>
       <div>
-        <Label>Page Range</Label>
+        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Page Range</Label>
         <PageRangeInputs
           value={quizConfig.pageRange}
           onChange={(value) => setQuizConfig(prev => ({ ...prev, pageRange: value }))}
@@ -430,7 +695,7 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
         />
       </div>
       <Button onClick={handleStartQuiz} disabled={isLoading} className="w-full">
-        {isLoading ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : null}
+        {isLoading ? <FiRefreshCw className="h-4 w-4 animate-spin mr-2" /> : null}
         Start Quiz
       </Button>
     </div>
@@ -577,216 +842,720 @@ export default function PDFAIPanel({ pdfUrl, currentPage, totalPages }: { pdfUrl
     );
   }, [quizResults, quizFeedback, detailedQuizFeedback, handleNewQuiz]);
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    // Implement file upload logic here
-    console.log('File uploaded:', event.target.files);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputMessage.trim() || isLoading) return;
+    
+    console.log('Form submitted, triggering chat...');
+    await handleRagChat();
   };
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    // Implement image upload logic here
-    console.log('Image uploaded:', event.target.files);
+  const embedDocument = useCallback(async (file: File) => {
+    if (!file) return;
+
+    setIsEmbedding(true);
+    setIsProcessing(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // First upload the file
+      const uploadResponse = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const uploadData = await uploadResponse.json();
+      console.log('File uploaded:', uploadData);
+
+      // Immediately start processing
+      const processResponse = await fetch('/api/process-document', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId: uploadData.path,
+          startProcessing: true
+        }),
+      });
+
+      if (!processResponse.ok) {
+        throw new Error('Failed to start document processing');
+      }
+
+      // Update status and notify user
+      setIsProcessing(true);
+      onFileUpload?.(uploadData.path);
+
+      toast({
+        title: "Processing Started",
+        description: "Your document is being processed. You'll be notified when it's ready.",
+        duration: 5000,
+      });
+
+    } catch (error) {
+      console.error('Error uploading file:', error);
+      toast({
+        title: "Error",
+        description: "Failed to upload and process file. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsEmbedding(false);
+    }
+  }, [onFileUpload, toast]);
+
+  // Add this effect to handle document processing status
+  useEffect(() => {
+    if (pdfUrl && !isVectorized) {
+      checkAndProcessDocument();
+    }
+  }, [pdfUrl, isVectorized]);
+
+  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      console.log('File uploaded:', file)
+      embedDocument(file)
+    }
+  }, [embedDocument])
+
+  const handleImageUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      console.log('Image uploaded:', file)
+      embedDocument(file)
+    }
+  }, [embedDocument])
+
+  const askQuestion = async (question: string) => {
+    if (!pdfUrl) return;
+    
+    setIsLoading(true);
+    try {
+      console.log('Sending question to RAG endpoint:', question);
+      console.log('Document URL:', pdfUrl);
+      
+      const response = await fetch('/api/rag', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentId: pdfUrl,
+          question
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ 
+          error: 'Failed to parse error response',
+          details: `Server returned ${response.status}`
+        }));
+        console.error('Error response:', errorData);
+        throw new Error(errorData.details || errorData.error || `Server error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      return data.answer;
+    } catch (error: any) {
+      console.error('Error asking question:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to get response from AI",
+        variant: "destructive",
+      });
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  const vectorizeDocument = async () => {
+    if (!pdfContent || isVectorized) return;
+    
+    setIsProcessing(true);
+    setError(null);
+    setProcessingStatus('processing');
+    setProcessingProgress(0);
+    setIsPollingStatus(true);
+    
+    try {
+      const response = await fetch('/api/rag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentContent: pdfContent,
+          documentId: pdfUrl,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to process document');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to process document');
+      console.error('Error vectorizing document:', err);
+      setIsPollingStatus(false);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (pdfUrl && !isVectorized) {
+      vectorizeDocument();
+    }
+  }, [pdfUrl]);
+
+  const StreamingText = ({ text }: { text: string }) => {
+    const [displayText, setDisplayText] = useState('');
+    const streamRef = useRef<HTMLDivElement>(null);
+    const chatContainerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      let index = 0;
+      const stream = setInterval(() => {
+        if (index < text.length) {
+          setDisplayText(prev => prev + text[index]);
+          index++;
+          
+          const container = chatContainerRef.current;
+          const isScrolledToBottom = container && 
+            (container.scrollHeight - container.scrollTop <= container.clientHeight + 100);
+          
+          if (isScrolledToBottom) {
+            streamRef.current?.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'end'
+            });
+          }
+        } else {
+          clearInterval(stream);
+        }
+      }, 2); // Super fast streaming (2ms)
+
+      return () => clearInterval(stream);
+    }, [text]);
+
+    return (
+      <div ref={streamRef}>
+        <Markdown 
+          className="prose dark:prose-invert max-w-none"
+          components={{
+            strong: ({ children }) => (
+              <span className="font-bold text-purple-600 dark:text-purple-400">
+                {children}
+              </span>
+            ),
+            li: ({ children }) => (
+              <li className="ml-4 list-disc marker:text-purple-500">
+                {children}
+              </li>
+            ),
+            p: ({ children }) => (
+              <p className="mb-2 leading-relaxed">
+                {children}
+              </p>
+            ),
+          }}
+        >
+          {displayText}
+        </Markdown>
+      </div>
+    );
+  };
+
+  const LoadingDots: React.FC = () => (
+    <div className="flex items-center space-x-1.5">
+      <motion.div
+        className="w-2 h-2 rounded-full bg-purple-500 dark:bg-purple-400"
+        animate={{ scale: [1, 1.2, 1] }}
+        transition={{ duration: 1, repeat: Infinity }}
+      />
+      <motion.div
+        className="w-2 h-2 rounded-full bg-indigo-500 dark:bg-indigo-400"
+        animate={{ scale: [1, 1.2, 1] }}
+        transition={{ duration: 1, repeat: Infinity, delay: 0.2 }}
+      />
+      <motion.div
+        className="w-2 h-2 rounded-full bg-blue-500 dark:bg-blue-400"
+        animate={{ scale: [1, 1.2, 1] }}
+        transition={{ duration: 1, repeat: Infinity, delay: 0.4 }}
+      />
+    </div>
+  );
+
+  const handleGenerateSummary = async () => {
+    if (!pdfUrl) return;
+    
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/gen_notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentId: pdfUrl,
+          pageRange: summaryPageRange,
+          focus: summaryFocus,
+          description: summaryDescription,
+          type: 'summary'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate summary');
+      }
+      
+      const data = await response.json();
+      setNotes(data.notes);
+    } catch (error) {
+      console.error('Error generating summary:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate summary. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputMessage(e.target.value);
+  };
+
+  // Add this effect to check if the document is vectorized
+  useEffect(() => {
+    const checkVectorization = async () => {
+      if (!pdfUrl) return;
+      
+      try {
+        const response = await fetch(`/api/processing-status?documentId=${encodeURIComponent(pdfUrl)}`);
+        if (!response.ok) throw new Error('Failed to check status');
+        
+        const data = await response.json();
+        console.log('Processing status:', data);
+        setIsVectorized(data.status === 'completed');
+      } catch (error) {
+        console.error('Error checking vectorization:', error);
+      }
+    };
+
+    checkVectorization();
+  }, [pdfUrl]);
+
+  if (!mounted) {
+    return null;
+  }
 
   return (
-    <div className="fixed right-4 top-150 flex flex-col-reverse items-end space-y-7 space-y-reverse z-10">
-      <AnimatePresence>
-        {activePanel && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50"
-          >
-            <div className="w-[70vw] h-[70vh] bg-gradient-to-br from-purple-50 to-white rounded-lg shadow-lg overflow-hidden">
-                <div className="h-full flex flex-col">
-                  <div className="bg-gradient-to-r from-purple-500 to-indigo-600 p-4 flex justify-between items-center">
-                    <h2 className="text-2xl font-bold text-white">
-                      {activePanel === 'chat' && 'Chat with PDF'}
-                      {activePanel === 'notes' && 'AI Notes'}
-                      {activePanel === 'quiz' && 'Quiz Me'}
-                    </h2>
-                    <Button
-                      variant="ghost"
-                      className="text-white hover:bg-purple-400"
-                      onClick={() => setActivePanel(null)}
+    <>
+      {/* Floating AI Button */}
+      {!isPanelVisible && (
+        <button
+          onClick={() => setIsPanelVisible(true)}
+          className={`fixed right-6 bottom-24 p-4 rounded-full shadow-xl ${
+            theme === 'dark' 
+              ? 'bg-gray-800 text-purple-400 hover:text-purple-300' 
+              : 'bg-white text-purple-600 hover:text-purple-500'
+          } border ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}
+          hover:scale-110 transition-all duration-200 z-50`}
+        >
+          <FiMessageSquare size={24} />
+        </button>
+      )}
+
+      {/* AI Panel */}
+      {isPanelVisible && (
+        <div className={`fixed transition-all duration-300 ease-in-out ${
+          isExpanded 
+            ? 'inset-4' 
+            : 'inset-y-4 right-4 w-[480px]'
+        } ${theme === 'dark' ? 'bg-gray-800/95' : 'bg-white/95'} 
+          backdrop-blur-md flex flex-col shadow-2xl border rounded-2xl z-50
+          ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}
+        >
+          {/* Panel Header */}
+          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center space-x-2">
+              {activePanel && (
+                <button
+                  onClick={() => setActivePanel(null)}
+                  className="p-2 rounded-lg transition-colors text-gray-600 hover:bg-gray-100"
+                >
+                  <FiChevronLeft size={20} />
+                </button>
+              )}
+              <h2 className="text-lg font-semibold text-gray-900">
+                {activePanel ? activePanel.charAt(0).toUpperCase() + activePanel.slice(1) : 'AI Assistant'}
+              </h2>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="p-2 rounded-lg transition-colors text-gray-600 hover:bg-gray-100"
+              >
+                {isExpanded ? <FiMinimize size={20} /> : <FiMaximize size={20} />}
+              </button>
+              <button
+                onClick={() => {
+                  setActivePanel(null);
+                  setIsPanelVisible(false);
+                }}
+                className="p-2 rounded-lg transition-colors text-gray-600 hover:bg-gray-100"
+              >
+                <FiX size={20} />
+              </button>
+            </div>
+          </div>
+
+          {/* Panel Content */}
+          <div className="flex-1 overflow-hidden">
+            {!activePanel ? (
+              // Main Menu
+              <div className="grid grid-cols-2 gap-4 p-6">
+                {[
+                  { icon: <FiMessageSquare />, label: 'Chat', id: 'chat' },
+                  { icon: <FiBook />, label: 'Summary', id: 'summarize' },
+                  { icon: <FiEdit2 />, label: 'Notes', id: 'notes' },
+                  { icon: <FiRefreshCw />, label: 'Quiz', id: 'quiz' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setActivePanel(item.id)}
+                    className="flex flex-col items-center justify-center p-6 rounded-xl transition-all
+                      bg-gradient-to-br from-gray-800/50 to-gray-900/50 hover:from-gray-700/50 hover:to-gray-800/50 
+                      border border-gray-700 text-white shadow-lg hover:shadow-xl
+                      transform hover:scale-105 duration-200"
+                  >
+                    <div className="p-4 rounded-full mb-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white">
+                      {React.cloneElement(item.icon, { size: 24 })}
+                    </div>
+                    <span className="text-sm font-medium">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              // Feature-specific content
+              <div className="h-full overflow-y-auto">
+                <AnimatePresence mode="wait">
+                  {activePanel === 'chat' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="flex flex-col h-full"
                     >
-                      &times;
-                    </Button>
-                  </div>
-                  <div className="flex-grow overflow-y-auto p-6">
-                    <SearchBar />
-                    {activePanel === 'chat' && (
-                      <div className="h-full flex flex-col">
-                        <div ref={chatContainerRef} className="flex-grow overflow-y-auto mb-4 space-y-4">
-                          {chatMessages.map((msg, index) => (
-                            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                              <div className={`max-w-[80%] p-3 rounded-lg ${msg.role === 'user' ? 'bg-purple-100' : 'bg-white border border-purple-200'}`}>
-                                <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                      <div className="flex flex-col h-full bg-white rounded-lg shadow-lg">
+                        {/* Chat Messages */}
+                        <div 
+                          ref={chatContainerRef}
+                          id="chat-container"
+                          className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-800"
+                        >
+                          {messages.map((message, index) => (
+                            <motion.div
+                              key={index}
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.3, ease: "easeOut" }}
+                              className={`flex ${message.role === 'assistant' ? 'justify-start' : 'justify-end'} mb-4`}
+                            >
+                              <div 
+                                className={`${
+                                  message.role === 'assistant' 
+                                    ? 'bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/30 dark:to-indigo-900/30 text-gray-800 dark:text-gray-200 shadow-purple-500/10' 
+                                    : 'bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-gray-800 dark:to-gray-700 text-gray-800 dark:text-gray-200 shadow-amber-500/10'
+                                } rounded-2xl px-5 py-3.5 max-w-[85%] shadow-lg backdrop-blur-sm border border-white/10`}
+                              >
+                                {message.role === 'assistant' && index === messages.length - 1 && isLoading ? (
+                                  <StreamingText text={message.content} />
+                                ) : (
+                                  <div className="prose dark:prose-invert max-w-none">
+                                    <Markdown
+                                      components={{
+                                        strong: ({ children }) => (
+                                          <span className="font-bold text-purple-600 dark:text-purple-400">
+                                            {children}
+                                          </span>
+                                        ),
+                                        li: ({ children }) => (
+                                          <li className="ml-4 list-disc marker:text-purple-500">
+                                            {children}
+                                          </li>
+                                        ),
+                                        p: ({ children }) => (
+                                          <p className="mb-2 leading-relaxed">
+                                            {children}
+                                          </p>
+                                        ),
+                                      }}
+                                    >
+                                      {message.content}
+                                    </Markdown>
+                                  </div>
+                                )}
                               </div>
-                            </div>
+                            </motion.div>
                           ))}
-                          {streamingContent && (
-                            <div className="flex justify-start">
-                              <div className="max-w-[80%] p-3 rounded-lg bg-white border border-purple-200">
-                                <MarkdownRenderer>{streamingContent}</MarkdownRenderer>
+                          {isLoading && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="flex justify-start mb-4"
+                            >
+                              <div className="flex items-center space-x-3 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 rounded-xl shadow-sm">
+                                <div className="flex space-x-2">
+                                  {[0, 1, 2].map((i) => (
+                                    <motion.div
+                                      key={i}
+                                      className="w-3 h-3 rounded-full bg-gradient-to-r from-purple-500 to-indigo-500"
+                                      animate={{
+                                        scale: [1, 1.2, 1],
+                                        opacity: [1, 0.7, 1]
+                                      }}
+                                      transition={{
+                                        duration: 0.8,
+                                        repeat: Infinity,
+                                        ease: "easeInOut",
+                                        delay: i * 0.2
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-sm font-medium bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-400 dark:to-indigo-400 bg-clip-text text-transparent">
+                                  Generating response...
+                                </span>
                               </div>
-                            </div>
+                            </motion.div>
                           )}
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <label htmlFor="file-upload" className="cursor-pointer">
-                            <Paperclip className="h-5 w-5 text-gray-400 hover:text-purple-500" />
-                            <input
-                              id="file-upload"
-                              type="file"
-                              className="hidden"
-                              onChange={handleFileUpload}
-                            />
-                          </label>
-                          <label htmlFor="image-upload" className="cursor-pointer">
-                            <ImageIcon className="h-5 w-5 text-gray-400 hover:text-purple-500" />
-                            <input
-                              id="image-upload"
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={handleImageUpload}
-                            />
-                          </label>
-                          <Input
-                            ref={inputRef}
-                            value={inputMessage}
-                            onChange={(e) => setInputMessage(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleRagChat();
-                              }
-                            }}
-                            placeholder="Type your message..."
-                            className="flex-grow"
-                            disabled={isLoading}
-                          />
-                          <Button onClick={handleRagChat} className="shrink-0" disabled={isLoading}>
-                            {isLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                    {activePanel === 'notes' && (
-                      <div className="h-full flex flex-col">
-                        <div className="mb-4 space-y-4">
-                          <div className="flex justify-between items-center">
-                            <Select>
-                              <SelectTrigger className="w-[180px]">
-                                <SelectValue placeholder="Note style" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="cornell">Cornell</SelectItem>
-                                <SelectItem value="outline">Outline</SelectItem>
-                                <SelectItem value="mindmap">Mind Map</SelectItem>
-                              </SelectContent>
-                            </Select>
+
+                        {/* Input Form */}
+                        <div className="p-4 border-t dark:border-gray-700/50 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
+                          <form onSubmit={handleSubmit} className="flex gap-3">
                             <Input
-                              type="text"
-                              placeholder="Focus (optional)"
-                              value={notesFocus}
-                              onChange={(e) => setNotesFocus(e.target.value)}
-                              className="w-40"
+                              value={inputMessage}
+                              onChange={handleInputChange}
+                              placeholder="Ask a question about the document..."
+                              className="flex-1 bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400"
+                              disabled={isLoading}
                             />
-                          </div>
-                          <div>
-                            <Label>Page Range</Label>
-                            <PageRangeInputs
-                              value={notesPageRange}
-                              onChange={setNotesPageRange}
-                              min={1}
-                              max={totalPages}
-                            />
-                          </div>
-                          <Button onClick={handleGenerateNotes} className="w-full">
-                            <RefreshCw className="h-4 w-4 mr-2" />
-                            Generate Notes
-                          </Button>
+                            <Button 
+                              type="submit" 
+                              disabled={isLoading || !inputMessage.trim()}
+                              className="px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 
+                                hover:from-purple-600 hover:to-indigo-700 text-white rounded-lg
+                                shadow-lg shadow-purple-500/25 hover:shadow-purple-500/40 
+                                transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+                                disabled:hover:shadow-purple-500/25"
+                            >
+                              {isLoading ? (
+                                <motion.div
+                                  animate={{ rotate: 360 }}
+                                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                >
+                                  <FiLoader className="w-5 h-5" />
+                                </motion.div>
+                              ) : (
+                                <FiSend className="w-5 h-5" />
+                              )}
+                            </Button>
+                          </form>
                         </div>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {activePanel === 'quiz' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="p-6"
+                    >
+                      <div className="text-gray-900">
+                        {!quizQuestions.length ? renderQuizConfig() : 
+                         showResults ? renderQuizResults() : 
+                         renderQuizQuestion()}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {activePanel === 'notes' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="p-6 space-y-4"
+                    >
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Page Range</Label>
+                          <PageRangeInputs
+                            value={notesPageRange}
+                            onChange={setNotesPageRange}
+                            min={1}
+                            max={totalPages}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Focus (Optional)</Label>
+                          <Input
+                            value={notesFocus}
+                            onChange={(e) => setNotesFocus(e.target.value)}
+                            placeholder="Enter topic focus"
+                            className={`${
+                              theme === 'dark' 
+                                ? 'bg-gray-800 text-white border-gray-700' 
+                                : 'bg-white text-gray-900 border-gray-200'
+                            } focus:ring-purple-500`}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Description (Optional)</Label>
                         <Textarea
-                          value={notes}
-                          onChange={(e) => setNotes(e.target.value)}
-                          placeholder="Your notes will appear here..."
-                          className="flex-grow mb-4"
-                          disabled={!isEditingNotes}
+                          value={notesDescription}
+                          onChange={(e) => setNotesDescription(e.target.value)}
+                          placeholder="Add any specific requirements or details for the notes..."
+                          className={`${
+                            theme === 'dark' 
+                              ? 'bg-gray-800 text-white border-gray-700' 
+                              : 'bg-white text-gray-900 border-gray-200'
+                          } focus:ring-purple-500 min-h-[100px]`}
                         />
-                        <div className="flex justify-end space-x-2">
-                          <Button variant="outline" onClick={() => setIsEditingNotes(!isEditingNotes)}>
-                            {isEditingNotes ? <Save className="h-4 w-4 mr-2" /> : <Edit2 className="h-4 w-4 mr-2" />}
-                            {isEditingNotes ? 'Save' : 'Edit'}
+                      </div>
+
+                      <Button 
+                        onClick={handleGenerateNotes}
+                        disabled={isLoading}
+                        className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 
+                          text-white hover:from-purple-600 hover:to-indigo-700 
+                          transition-all duration-200 shadow-lg hover:shadow-xl"
+                      >
+                        {isLoading ? (
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="mr-2"
+                          >
+                            <Loader2 className="w-5 h-5" />
+                          </motion.div>
+                        ) : null}
+                        Generate Notes
+                      </Button>
+
+                      <div className="rounded-lg p-6 bg-gray-800 border border-gray-700 shadow-xl">
+                        {isEditingNotes ? (
+                          <Textarea
+                            value={notes}
+                            onChange={(e) => setNotes(e.target.value)}
+                            className="w-full h-[400px] bg-gray-900 text-white border-gray-700 
+                              focus:ring-purple-500 resize-none"
+                          />
+                        ) : (
+                          <div className="prose prose-invert max-w-none text-white">
+                            <MarkdownRenderer>{notes}</MarkdownRenderer>
+                          </div>
+                        )}
+                        <div className="flex justify-end space-x-2 mt-4">
+                          <Button
+                            onClick={() => setIsEditingNotes(!isEditingNotes)}
+                            className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white
+                              hover:from-purple-600 hover:to-indigo-700 transition-all duration-200"
+                          >
+                            {isEditingNotes ? (
+                              <>
+                                <FiSave className="mr-2" />
+                                Save
+                              </>
+                            ) : (
+                              <>
+                                <FiEdit2 className="mr-2" />
+                                Edit
+                              </>
+                            )}
                           </Button>
                         </div>
                       </div>
-                    )}
-                    {activePanel === 'quiz' && (
-                      <div className="h-full flex flex-col">
-                        {quizQuestions.length === 0 ? (
-                          renderQuizConfig()
-                        ) : showResults ? (
-                          renderQuizResults()
-                        ) : (
-                          renderQuizQuestion()
-                        )}
+                    </motion.div>
+                  )}
+
+                  {activePanel === 'summarize' && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="p-6 space-y-4"
+                    >
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Page Range</Label>
+                          <PageRangeInputs
+                            value={summaryPageRange}
+                            onChange={setSummaryPageRange}
+                            min={1}
+                            max={totalPages}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Focus (Optional)</Label>
+                          <Input
+                            value={summaryFocus}
+                            onChange={(e) => setSummaryFocus(e.target.value)}
+                            placeholder="Enter topic focus"
+                            className={`${
+                              theme === 'dark' 
+                                ? 'bg-gray-800 text-white border-gray-700' 
+                                : 'bg-white text-gray-900 border-gray-200'
+                            } focus:ring-purple-500`}
+                          />
+                        </div>
                       </div>
-                    )}
-                  </div>
-                </div>
-                </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      
-      {/* Chat button */}
-      <motion.div
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-      >
-        <Button
-          variant="outline"
-          size="icon"
-          className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700"
-          onClick={() => setActivePanel(activePanel === 'chat' ? null : 'chat')}
-        >
-          <MessageSquare className="h-6 w-6" />
-        </Button>
-      </motion.div>
 
-      {/* Notes button */}
-      <motion.div
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-      >
-        <Button
-          variant="outline"
-          size="icon"
-          className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700"
-          onClick={() => setActivePanel(activePanel === 'notes' ? null : 'notes')}
-        >
-          <BookOpen className="h-6 w-6" />
-        </Button>
-      </motion.div>
+                      <div className="space-y-2">
+                        <Label className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>Description (Optional)</Label>
+                        <Textarea
+                          value={summaryDescription}
+                          onChange={(e) => setSummaryDescription(e.target.value)}
+                          placeholder="Add any specific requirements or details for the summary..."
+                          className={`${
+                            theme === 'dark' 
+                              ? 'bg-gray-800 text-white border-gray-700' 
+                              : 'bg-white text-gray-900 border-gray-200'
+                          } focus:ring-purple-500 min-h-[100px]`}
+                        />
+                      </div>
 
-      {/* Quiz button */}
-      <motion.div
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-      >
-        <Button
-          variant="outline"
-          size="icon"
-          className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700"
-          onClick={() => setActivePanel(activePanel === 'quiz' ? null : 'quiz')}
-        >
-          <HelpCircle className="h-6 w-6" />
-        </Button>
-      </motion.div>
-    </div>
-  )
-}
+                      <div className="rounded-lg p-6 bg-gray-800 border border-gray-700 shadow-xl">
+                        <div className="prose prose-invert max-w-none text-white">
+                          <MarkdownRenderer>{notes}</MarkdownRenderer>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
+export default PDFAIPanel;

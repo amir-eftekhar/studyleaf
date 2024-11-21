@@ -31,7 +31,7 @@ interface DetailedQuizFeedback {
 }
 
 async function gradeQuiz(questions: QuizQuestion[]): Promise<{ results: QuizResult[], feedback: string, detailedFeedback: DetailedQuizFeedback[] }> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
   
   const prompt = `Grade the following quiz and provide detailed feedback:
 

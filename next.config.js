@@ -1,36 +1,27 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
-  api: {
-    bodyParser: {
-      sizeLimit: '30mb', // Set the maximum file size to 10MB or adjust as needed
-    },
+  experimental: {
+    appDir: true,
   },
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-      };
-    }
-    
-    // Add this to include the PDF.js worker in the build
-    config.module.rules.push({
-      test: /pdf\.worker\.(min\.)?js/,
-      use: [
-        {
-          loader: 'file-loader',
-          options: {
-            name: '[name].[ext]',
-            publicPath: '/_next/static/worker',
-            outputPath: 'static/worker',
-          },
-        },
-      ],
-    });
-
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization' },
+        ],
+      },
+    ];
+  },
+  webpack: (config) => {
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+    };
     return config;
   },
 }
 
-module.exports = nextConfig
+module.exports = nextConfig;

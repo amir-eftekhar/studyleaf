@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { setupVectorSearch, getDocumentContent } from '@/lib/vectorDb';
+import { getVectorStore } from '@/lib/vectorDb';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
@@ -21,10 +21,11 @@ interface QuizConfig {
   };
   difficulty: 'easy' | 'medium' | 'hard';
   adaptive: boolean;
+  pageRange: [number, number];
 }
 
 async function generateQuiz(content: string, config: QuizConfig): Promise<QuizQuestion[]> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
   
   const prompt = `Generate a quiz based on the following content. The quiz should have:
 - ${config.numQuestions.multiple_choice} multiple-choice questions
@@ -97,11 +98,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Document ID and quiz configuration are required' }, { status: 400 });
     }
 
-    console.log('Setting up vector search');
-    await setupVectorSearch(documentId);
-
-    console.log('Retrieving document content');
-    const content = await getDocumentContent(documentId);
+    // Get the vector store instance
+    const vectorStore = await getVectorStore(documentId);
+    
+    // Get content for the specified page range or all pages if endPage is 0
+    const startPage = quizConfig.pageRange[0];
+    const endPage = quizConfig.pageRange[1] || 0; // If endPage is 0, it means get all pages
+    
+    console.log('Retrieving content for pages:', { startPage, endPage });
+    const content = await vectorStore.getContentForPages(startPage, endPage);
+    
     if (!content) {
       console.log('Failed to retrieve document content');
       return NextResponse.json({ error: 'Failed to retrieve document content' }, { status: 500 });

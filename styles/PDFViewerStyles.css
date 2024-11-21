@@ -1,0 +1,20 @@
+/* Dark mode styles for PDF viewer */
+.rpv-core__viewer.dark {
+  background-color: #1f2937;
+  color: #e5e7eb;
+}
+
+.rpv-core__viewer.dark .rpv-core__page {
+  background-color: #374151;
+}
+
+/* Center the PDF content */
+.rpv-core__viewer {
+  display: flex;
+  justify-content: center;
+}
+
+.rpv-core__viewer-zone {
+  max-width: 100%;
+  margin: 0 auto;
+} 

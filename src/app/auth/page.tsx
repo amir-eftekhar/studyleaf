@@ -3,13 +3,16 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FiMail, FiLock, FiUser, FiEye, FiEyeOff, FiPhone } from 'react-icons/fi';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { signIn } from 'next-auth/react';
+import axios from 'axios';
 
 const LoginSignup = () => {
-   const router = useRouter();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     const auth = searchParams.get('auth');
@@ -23,42 +26,76 @@ const LoginSignup = () => {
 
   const togglePasswordVisibility = () => setShowPassword(!showPassword);
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const validatePassword = (password: string) => {
+    if (password.length < 8) {
+      return 'Password must be at least 8 characters long';
+    }
+    return null;
+  };
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setIsLoading(true);
     setError('');
-    const formData = new FormData(event.currentTarget);
+
+    const formData = new FormData(e.currentTarget);
     const email = formData.get('email') as string;
     const password = formData.get('password') as string;
-    const name = formData.get('name') as string;
-    const phone = formData.get('phone') as string;
-  
-    try {
-      const endpoint = '/api/auth';
-      const body = isLogin 
-        ? { action: 'login', email, password }
-        : { action: 'signup', name, phone, email, password };
     
-      console.log('Sending request with body:', body); // Log the request body
-  
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    
-      const data = await response.json();
-    
-      if (response.ok) {
-        router.push('/home');
-      } else {
-        console.error('Server response:', data); // Log the server response
-        throw new Error(data.error || data.details?.join(', ') || 'An error occurred');
+    if (!isLogin) {
+      const passwordError = validatePassword(password);
+      if (passwordError) {
+        setError(passwordError);
+        setIsLoading(false);
+        return;
       }
-    } catch (error) {
-      console.error('Authentication error:', error);
-      setError(error instanceof Error ? error.message : 'An unexpected error occurred');
+    }
+    
+    try {
+      if (isLogin) {
+        const result = await signIn('credentials', {
+          email,
+          password,
+          redirect: false,
+        });
+
+        if (result?.error) {
+          setError(result.error);
+        } else {
+          const callbackUrl = searchParams.get('callbackUrl') || '/home';
+          router.push(callbackUrl);
+          router.refresh();
+        }
+      } else {
+        const res = await axios.post('/api/auth/signup', {
+          name: formData.get('name'),
+          email: formData.get('email'),
+          password: formData.get('password'),
+          phone: formData.get('phone'),
+        });
+
+        if (res.data.success) {
+          // After signup, automatically sign in
+          const result = await signIn('credentials', {
+            email,
+            password,
+            redirect: false,
+          });
+
+          if (!result?.error) {
+            router.push('/home');
+            router.refresh();
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('Form submission error:', error.response?.data || error);
+      setError(error.response?.data?.error || error.response?.data?.details || 'An error occurred');
+    } finally {
+      setIsLoading(false);
     }
   };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 flex items-center justify-center p-4">
       <motion.div
@@ -156,12 +193,30 @@ const LoginSignup = () => {
                   </button>
                 </div>
               </div>
+              {error && (
+                <div className="p-3 mb-4 text-sm text-red-800 rounded-lg bg-red-50">
+                  <p>{error}</p>
+                </div>
+              )}
               <div>
                 <button
                   type="submit"
-                  className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  disabled={isLoading}
+                  className={`w-full py-2 px-4 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                    isLoading ? 'opacity-75 cursor-not-allowed' : ''
+                  }`}
                 >
-                  {isLogin ? 'Sign In' : 'Sign Up'}
+                  {isLoading ? (
+                    <span className="flex items-center justify-center">
+                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Processing...
+                    </span>
+                  ) : (
+                    isLogin ? 'Sign In' : 'Create Account'
+                  )}
                 </button>
               </div>
             </motion.form>
@@ -176,6 +231,5 @@ const LoginSignup = () => {
     </div>
   );
 };
-
 
 export default LoginSignup;

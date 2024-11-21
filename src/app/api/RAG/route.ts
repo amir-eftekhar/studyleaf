@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { setupVectorSearch, insertEmbedding, vectorSearch, wordSearch, closeConnection, getSystemPrompt, getDocumentContent } from '@/lib/vectorDb';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { setupVectorSearch, insertEmbedding, closeConnection, updateProcessingStatus } from '@/lib/vectorDb';
+import { MongoClient } from 'mongodb';
 
+const client = new MongoClient(process.env.MONGODB_URI!);
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 async function generateEmbedding(text: string) {
@@ -13,131 +15,143 @@ async function generateEmbedding(text: string) {
   return embedding.values;
 }
 
-async function generateAnswer(context: string, question: string, systemPrompt: string) {
-  console.log('Generating answer for question:', question);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-  
-  const chat = model.startChat({
-    history: [
-      {
-        role: "user",
-        parts: [{ text: systemPrompt }],
-      },
-      {
-        role: "model",
-        parts: [{ text: "Understood. I'll answer questions based on the provided context and system prompt." }],
-      },
-    ],
-    generationConfig: {
-      maxOutputTokens: 1000,
-    },
-    safetySettings: [
-      {
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-    ],
-  });
-
-  const result = await chat.sendMessage(`Context: ${context}\n\nQuestion: ${question}\n\nPlease provide a detailed answer. Use markdown formatting for emphasis, lists, and structure. Use LaTeX for mathematical expressions when appropriate.`);
-  console.log('Answer generated');
-  return result.response.text();
-}
-
 function splitIntoSections(text: string, maxLength: number = 1000): string[] {
-  console.log('Splitting text into sections, total length:', text.length);
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
-  const sections: string[] = [];
-  let currentSection = '';
+  // First, split by common section markers
+  const sectionMarkers = /(?:Chapter|Section|\d+\.)\s+[A-Z]/g;
+  let sections = text.split(sectionMarkers);
+  
+  // If no natural sections found, split by paragraphs
+  if (sections.length <= 1) {
+    sections = text.split(/\n\s*\n/);
+  }
 
-  for (const sentence of sentences) {
-    if (currentSection.length + sentence.length > maxLength) {
-      sections.push(currentSection.trim());
-      currentSection = '';
+  // Further split long sections
+  const result: string[] = [];
+  for (const section of sections) {
+    if (section.trim().length === 0) continue;
+    
+    if (section.length <= maxLength) {
+      result.push(section.trim());
+      continue;
     }
-    currentSection += sentence + ' ';
+
+    // Split long sections by sentences
+    const sentences = section.match(/[^.!?]+[.!?]+/g) || [];
+    let currentChunk = '';
+
+    for (const sentence of sentences) {
+      if (currentChunk.length + sentence.length > maxLength) {
+        if (currentChunk.trim()) {
+          result.push(currentChunk.trim());
+        }
+        currentChunk = sentence;
+      } else {
+        currentChunk += ' ' + sentence;
+      }
+    }
+
+    if (currentChunk.trim()) {
+      result.push(currentChunk.trim());
+    }
   }
 
-  if (currentSection.trim()) {
-    sections.push(currentSection.trim());
-  }
-
-  console.log('Number of sections created:', sections.length);
-  return sections;
+  return result.filter(section => section.length >= 50); // Filter out very short sections
 }
 
 export async function POST(request: Request) {
-  console.log('Received POST request to /api/RAG');
   try {
-    const { question, documentId, fileType } = await request.json();
+    const { documentContent, documentId } = await request.json();
 
-    if (!question || !documentId || !fileType) {
-      console.error('Missing required fields');
-      return NextResponse.json({ error: 'Question, document ID, and file type are required' }, { status: 400 });
+    if (!documentContent || !documentId) {
+      return NextResponse.json({ error: 'Document content and ID are required' }, { status: 400 });
     }
 
-    console.log('Setting up vector search');
-    try {
+    // Check if document is already processed
+    const db = client.db('pdf_database');
+    const statusCollection = db.collection('processing_status');
+    const existingStatus = await statusCollection.findOne({ documentId });
+    
+    if (existingStatus && existingStatus.status === 'completed') {
+      console.log('Document already processed:', documentId);
+      return NextResponse.json({ 
+        success: true,
+        message: 'Document already processed',
+        totalSections: existingStatus.totalSections,
+        processedSections: existingStatus.processedSections
+      });
+    }
+
+    // Initialize processing status only if not already processing
+    if (!existingStatus || existingStatus.status === 'error') {
       await setupVectorSearch(documentId);
-    } catch (error) {
-      console.error('Error setting up vector search:', error);
-      // Continue with the process even if setup fails
+    } else if (existingStatus.status === 'processing') {
+      return NextResponse.json({ 
+        success: true,
+        message: 'Document processing in progress',
+        totalSections: existingStatus.totalSections,
+        processedSections: existingStatus.processedSections
+      });
     }
 
-    console.log('Retrieving document content');
-    const documentContent = await getDocumentContent(documentId);
-    if (!documentContent) {
-      return NextResponse.json({ error: 'Failed to retrieve document content' }, { status: 500 });
+    // Split document into sections
+    const sections = splitIntoSections(documentContent);
+    if (sections.length === 0) {
+      throw new Error('No valid sections found in document');
     }
 
-    console.log('Generating embedding for question');
-    const questionEmbedding = await generateEmbedding(question);
+    console.log(`Processing ${sections.length} sections...`);
+    await updateProcessingStatus(documentId, 'processing', sections.length);
 
-    console.log('Performing vector search');
-    const similarDocs = await vectorSearch(questionEmbedding, 5, documentId);
+    // Process sections in parallel with a concurrency limit
+    const concurrencyLimit = 3;
+    let processedCount = 0;
 
-    console.log('Performing word search');
-    const wordSearchResults = await wordSearch(question, 5, documentId);
+    for (let i = 0; i < sections.length; i += concurrencyLimit) {
+      const chunk = sections.slice(i, Math.min(i + concurrencyLimit, sections.length));
+      
+      await Promise.all(chunk.map(async (section, index) => {
+        try {
+          const embedding = await generateEmbedding(section);
+          await insertEmbedding(documentId, section, embedding, i + index + 1);
+          processedCount++;
+          console.log(`Processed section ${processedCount}/${sections.length}`);
+        } catch (error) {
+          console.error('Error processing section:', error);
+          throw error;
+        }
+      }));
+    }
 
-    console.log('Combining and deduplicating results');
-    const combinedResults = [...similarDocs, ...wordSearchResults];
-    const uniqueResults = Array.from(new Set(combinedResults.map(doc => doc.content)))
-      .map(content => ({ content }));
+    // Verify processing completion
+    if (processedCount !== sections.length) {
+      throw new Error(`Processing incomplete: ${processedCount}/${sections.length} sections processed`);
+    }
 
-    console.log('Sorting results');
-    uniqueResults.sort((a, b) => ((b as any).score || 0) - ((a as any).score || 0));
+    // Mark as completed
+    await updateProcessingStatus(documentId, 'completed', sections.length);
+    console.log('Document processing completed successfully');
 
-    const relevantContent = uniqueResults.map(doc => doc.content).join('\n\n');
+    return NextResponse.json({ 
+      success: true,
+      totalSections: sections.length,
+      processedSections: processedCount
+    });
 
-    console.log('Retrieving system prompt');
-    const systemPrompt = await getSystemPrompt(documentId) || "You are a helpful assistant that answers questions based on the provided context. Use LaTeX for mathematical expressions when appropriate.";
-
-    console.log('Generating final answer');
-    const answer = await generateAnswer(relevantContent, question, systemPrompt);
-
-    console.log('Returning response');
-    return NextResponse.json({ answer, documentContent });
   } catch (error) {
-    console.error('Error in RAG process:', error);
-    return NextResponse.json({ error: 'Failed to process the question', details: (error as Error).message }, { status: 500 });
-  } finally {
-    console.log('Closing database connection');
-    try {
-      await closeConnection();
-    } catch (error) {
-      console.error('Error closing database connection:', error);
+    console.error('Error in document processing:', error);
+    if (documentId) {
+      await updateProcessingStatus(
+        documentId, 
+        'error', 
+        undefined, 
+        error instanceof Error ? error.message : 'Unknown error'
+      );
     }
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    );
+  } finally {
+    await closeConnection();
   }
 }

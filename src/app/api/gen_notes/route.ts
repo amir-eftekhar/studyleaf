@@ -1,57 +1,126 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { setupVectorSearch, getDocumentContent } from '@/lib/vectorDb';
+import { getVectorStore, getProcessingStatus } from '@/lib/vectorDb';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 export async function POST(request: Request) {
-  const { pdfUrl, currentPage } = await request.json();
-
-  if (!pdfUrl) {
-    return NextResponse.json({ error: 'PDF URL is required' }, { status: 400 });
-  }
-
   try {
-    await setupVectorSearch(pdfUrl);
+    const body = await request.json();
+    console.log('Received request body:', body);
 
-    const documentContent = await getDocumentContent(pdfUrl);
-    if (!documentContent) {
-      return NextResponse.json({ error: 'Failed to retrieve document content' }, { status: 500 });
+    const { documentId, pageRange, focus } = body;
+
+    if (!documentId) {
+      console.log('Missing documentId');
+      return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+    if (!pageRange || !Array.isArray(pageRange) || pageRange.length !== 2) {
+      console.log('Invalid page range:', pageRange);
+      return NextResponse.json({ error: 'Valid page range is required' }, { status: 400 });
+    }
+
+    // Check processing status first
+    const processingStatus = await getProcessingStatus(documentId);
+    console.log('Processing status:', processingStatus);
+
+    if (!processingStatus || processingStatus.status === 'pending') {
+      return NextResponse.json(
+        { 
+          error: 'Document is not yet processed',
+          status: 'pending',
+          message: 'Please wait while we process your document.'
+        },
+        { status: 202 }
+      );
+    }
+
+    if (processingStatus.status === 'processing') {
+      return NextResponse.json(
+        { 
+          error: 'Document is still being processed',
+          status: 'processing',
+          progress: (processingStatus.processedSections / processingStatus.totalSections) * 100,
+          message: 'Document is being processed. Please wait.'
+        },
+        { status: 202 }
+      );
+    }
+
+    if (processingStatus.status === 'error') {
+      return NextResponse.json(
+        { 
+          error: processingStatus.error || 'Document processing failed',
+          status: 'error'
+        },
+        { status: 500 }
+      );
+    }
     
-    const prompt = `Based on the following content, generate concise and well-structured Cornell notes. Focus on the main ideas, key points, and important details. Include a summary at the end.
+    // Get the vector store instance
+    console.log('Getting vector store for document:', documentId);
+    const vectorStore = await getVectorStore(documentId);
+    
+    // Get content for the specified page range
+    console.log('Retrieving content for pages:', pageRange);
+    const content = await vectorStore.getContentForPages(pageRange[0], pageRange[1]);
+    
+    if (!content) {
+      console.log('No content found for page range:', pageRange);
+      return NextResponse.json({ 
+        error: 'No content found for the specified page range' 
+      }, { status: 404 });
+    }
 
-Content:
-${documentContent}
+    console.log('Generating notes with content length:', content.length);
+    const model = genAI.getGenerativeModel({ model: "gemini-" });
 
-Please format the notes in markdown, using headers, bullet points, and emphasis where appropriate.`;
+    const prompt = `Generate detailed study notes for the following text${focus ? ` focusing on ${focus}` : ''}. 
+    Format the notes in markdown with:
+    - Clear hierarchical headings
+    - Bullet points for key concepts
+    - Bold text for important terms
+    - Numbered lists for steps or sequences
+    - Brief summary at the end
+
+    Content to analyze:
+    ${content}
+
+    Please ensure the notes are well-structured and academically focused.`;
 
     const result = await model.generateContent(prompt);
-    const notes = result.response.text();
+    const response = await result.response;
+    const notes = response.text();
 
+    console.log('Successfully generated notes');
     return NextResponse.json({ notes });
+
   } catch (error) {
     console.error('Error generating notes:', error);
-    return NextResponse.json({ error: 'Failed to generate notes' }, { status: 500 });
+    return NextResponse.json(
+      { 
+        error: error instanceof Error ? error.message : 'An error occurred',
+        details: error instanceof Error ? error.stack : undefined
+      },
+      { status: 500 }
+    );
   }
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const documentId = searchParams.get('documentId');
-  const sectionId = searchParams.get('sectionId');
 
   if (!documentId) {
     return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
   }
 
   try {
-    const notes = await getNotes(documentId, sectionId || undefined);
-    return NextResponse.json({ notes });
+    const processingStatus = await getProcessingStatus(documentId);
+    return NextResponse.json({ status: processingStatus });
   } catch (error) {
-    console.error('Error retrieving notes:', error);
-    return NextResponse.json({ error: 'Failed to retrieve notes' }, { status: 500 });
+    console.error('Error getting notes status:', error);
+    return NextResponse.json({ error: 'Failed to get notes status' }, { status: 500 });
   }
 }

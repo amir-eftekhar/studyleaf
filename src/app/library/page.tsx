@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { FiSearch, FiPlus, FiBook, FiFolder, FiUsers, FiBell, FiMenu, FiX, FiUpload, FiSettings, FiFile, FiTrash2 } from 'react-icons/fi'
-import Link from 'next/link'
+import { useState, useRef, useEffect } from 'react'
+import { FiSearch, FiFile, FiTrash2, FiExternalLink } from 'react-icons/fi'
 import { useRouter } from 'next/navigation'
-import axios from 'axios'
+import { useSession } from 'next-auth/react'
+import { useToast } from "@/components/ui/use-toast"
+import MainLayout from '@/components/layout/MainLayout'
 
 type Document = {
   id: string
@@ -14,52 +14,207 @@ type Document = {
   size: number
   lastModified: Date
   url: string
+  status?: 'pending' | 'processing' | 'completed' | 'error'
+  processingProgress?: number
 }
 
 export default function LibraryPage() {
   const router = useRouter()
+  const { data: session } = useSession()
+  const { toast } = useToast()
   const [searchQuery, setSearchQuery] = useState('')
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [documents, setDocuments] = useState<Document[]>([])
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const toggleSidebar = () => {
-    setIsSidebarOpen(!isSidebarOpen)
+  // Fetch user's documents on mount
+  useEffect(() => {
+    if (session?.user) {
+      const loadDocuments = async () => {
+        try {
+          const response = await fetch('/api/documents')
+          const data = await response.json()
+          
+          setDocuments(data.documents)
+          
+          // Start polling only for documents that need it
+          const cleanupFunctions = data.documents
+            .filter((doc: Document) => doc.status === 'processing' || doc.status === 'pending')
+            .map((doc: Document) => pollProcessingStatus(doc.id, doc.url))
+          
+          // Cleanup polling on unmount
+          return () => {
+            cleanupFunctions.forEach((cleanup: () => void) => cleanup())
+          }
+        } catch (error) {
+          console.error('Error fetching documents:', error)
+          toast({
+            title: "Error",
+            description: "Failed to fetch documents",
+            variant: "destructive",
+          })
+        }
+      }
+
+      loadDocuments()
+    }
+  }, [session])
+
+  const fetchDocuments = async () => {
+    try {
+      const response = await fetch('/api/documents')
+      const data = await response.json()
+      setDocuments(data.documents)
+    } catch (error) {
+      console.error('Error fetching documents:', error)
+      toast({
+        title: "Error",
+        description: "Failed to fetch documents",
+        variant: "destructive",
+      })
+    }
   }
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement> | { target: { files: FileList } }) => {
     const files = event.target.files
     if (files) {
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
+        if (file.type !== 'application/pdf') {
+          toast({
+            title: "Error",
+            description: "Only PDF files are allowed",
+            variant: "destructive",
+          })
+          continue
+        }
+
         const formData = new FormData()
         formData.append('file', file)
 
         try {
-          const response = await axios.post('/api/upload_pdf', formData, {
-            headers: {
-              'Content-Type': 'multipart/form-data',
-            },
+          // Upload file and create document record
+          const uploadResponse = await fetch('/api/documents/upload', {
+            method: 'POST',
+            body: formData,
           })
 
+          if (!uploadResponse.ok) {
+            throw new Error('Upload failed')
+          }
+
+          const uploadData = await uploadResponse.json()
+          console.log('File uploaded:', uploadData)
+
+          // Add document to state with pending status
           const newDocument: Document = {
-            id: Math.random().toString(36).substr(2, 9),
+            id: uploadData.fileAsset._id,
             name: file.name,
             type: file.type,
             size: file.size,
             lastModified: new Date(file.lastModified),
-            url: response.data.url,
+            url: uploadData.fileAsset.filePath,
+            status: 'pending',
+            processingProgress: 0
           }
 
-          setDocuments(prevDocuments => [...prevDocuments, newDocument])
+          setDocuments(prev => [...prev, newDocument])
+
+          // Immediately start processing
+          const processResponse = await fetch('/api/process-document', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              documentId: uploadData.fileAsset.filePath,
+              startProcessing: true
+            }),
+          })
+
+          if (!processResponse.ok) {
+            throw new Error('Failed to start document processing')
+          }
+
+          // Start polling for processing status
+          pollProcessingStatus(newDocument.id, uploadData.fileAsset.filePath)
+
+          toast({
+            title: "Success",
+            description: "Document uploaded and processing started",
+          })
         } catch (error) {
           console.error('Error uploading file:', error)
-          // Handle error (e.g., show an error message to the user)
+          toast({
+            title: "Error",
+            description: "Failed to upload document",
+            variant: "destructive",
+          })
         }
       }
     }
   }
+
+  const pollProcessingStatus = async (documentId: string, filePath: string) => {
+    let pollingInterval: NodeJS.Timeout;
+    let attempts = 0;
+    const maxAttempts = 30; // Maximum number of polling attempts
+    
+    const checkStatus = async () => {
+      try {
+        // Use processing-status endpoint instead of process-document
+        const response = await fetch(`/api/processing-status?documentId=${encodeURIComponent(filePath)}`);
+        
+        if (!response.ok) {
+          console.error('Status check failed:', response.status);
+          clearInterval(pollingInterval);
+          return;
+        }
+
+        const data = await response.json();
+        attempts++;
+
+        setDocuments(prev => prev.map(doc => {
+          if (doc.id === documentId) {
+            return {
+              ...doc,
+              status: data.status,
+              processingProgress: data.totalSections && data.processedSections 
+                ? (data.processedSections / data.totalSections) * 100 
+                : 0
+            };
+          }
+          return doc;
+        }));
+
+        // Clear interval if processing is complete, errored, or max attempts reached
+        if (data.status === 'completed' || data.status === 'error' || attempts >= maxAttempts) {
+          console.log(`Stopping polling: ${data.status}, attempts: ${attempts}`);
+          clearInterval(pollingInterval);
+        }
+      } catch (error) {
+        console.error('Error checking processing status:', error);
+        clearInterval(pollingInterval);
+      }
+    };
+
+    // Initial check
+    await checkStatus();
+    
+    // Only start polling if the status is still processing
+    const initialStatus = documents.find(doc => doc.id === documentId)?.status;
+    if (initialStatus === 'processing' || initialStatus === 'pending') {
+      pollingInterval = setInterval(checkStatus, 5000); // Check every 5 seconds
+    }
+
+    // Cleanup function
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  };
 
   const handleDocumentSelect = (document: Document) => {
     router.push(`/reader?id=${document.id}&url=${encodeURIComponent(document.url)}`)
@@ -79,73 +234,53 @@ export default function LibraryPage() {
     else return (bytes / 1073741824).toFixed(1) + ' GB'
   }
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type === 'application/pdf')
+    if (files.length === 0) {
+      console.error('Only PDF files are allowed')
+      return
+    }
+    
+    if (files && fileInputRef.current) {
+      const dataTransfer = new DataTransfer()
+      files.forEach(file => dataTransfer.items.add(file))
+      fileInputRef.current.files = dataTransfer.files
+      handleFileUpload({ target: { files: dataTransfer.files } } as any)
+    }
+  }
+
+  const filteredDocuments = documents.filter(doc =>
+    doc.name.toLowerCase().includes(searchQuery.toLowerCase())
+  )
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100">
-      {/* Navigation */}
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <Link href="/" className="text-2xl font-bold text-indigo-600">
-                  StudyLeaf
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center">
-              <button onClick={toggleSidebar} className="p-2 rounded-full text-gray-400 hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                <FiMenu className="h-6 w-6" />
-              </button>
-              <button className="ml-3 p-2 rounded-full text-gray-400 hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                <FiBell className="h-6 w-6" />
-              </button>
-              <div className="ml-3 relative">
-                <div className="h-8 w-8 rounded-full bg-indigo-600"></div>
-              </div>
-            </div>
-          </div>
+    <MainLayout>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-900">Library</h1>
         </div>
-      </nav>
-
-      {/* Sidebar */}
-      <AnimatePresence>
-        {isSidebarOpen && (
-          <motion.div
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '100%' }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="fixed inset-y-0 right-0 z-50 w-64 bg-white shadow-lg"
-          >
-            <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-2xl font-bold text-indigo-600">Menu</h2>
-              <button onClick={toggleSidebar} className="text-gray-500 hover:text-indigo-600">
-                <FiX size={24} />
-              </button>
-            </div>
-            <nav className="p-4">
-              <ul className="space-y-2">
-                <SidebarItem icon={<FiBook />} text="Study" href="#" />
-                <SidebarItem icon={<FiFolder />} text="Library" href="#" />
-                <SidebarItem icon={<FiUsers />} text="Classes" href="#" />
-                <SidebarItem icon={<FiSettings />} text="Settings" href="#" />
-              </ul>
-            </nav>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Main content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">Library</h1>
 
         {/* Search bar */}
         <div className="mb-8">
-          <div className="relative">
+          <div className="relative max-w-lg">
             <input
               type="text"
-              className="w-full pl-10 pr-4 py-2 rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              placeholder="Search your documents"
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-800 dark:border-gray-700 dark:text-white"
+              placeholder="Search documents..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
@@ -156,12 +291,27 @@ export default function LibraryPage() {
         </div>
 
         {/* Upload area */}
-        <div className="mb-8">
-          <label htmlFor="file-upload" className="flex items-center justify-center w-full h-32 px-4 transition bg-white border-2 border-gray-300 border-dashed rounded-md appearance-none cursor-pointer hover:border-indigo-600 focus:outline-none">
-            <span className="flex items-center space-x-2">
-              <FiUpload className="w-6 h-6 text-gray-600" />
-              <span className="font-medium text-gray-600">Drop files to upload, or click to browse</span>
-            </span>
+        <div 
+          className={`mb-8 relative ${isDragging ? 'border-indigo-500' : 'border-gray-300'}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <label 
+            htmlFor="file-upload" 
+            className={`flex flex-col items-center justify-center w-full h-48 px-4 transition bg-white dark:bg-gray-800 border-2 border-dashed rounded-lg appearance-none cursor-pointer hover:border-indigo-500 focus:outline-none ${
+              isDragging ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-700'
+            }`}
+          >
+            <FiFile className="w-10 h-10 text-gray-400 mb-3" />
+            <div className="text-center">
+              <p className="text-lg text-gray-600 dark:text-gray-300">
+                Drag and drop your PDF files here
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                or click to browse
+              </p>
+            </div>
             <input 
               id="file-upload" 
               name="file-upload" 
@@ -169,71 +319,67 @@ export default function LibraryPage() {
               className="hidden" 
               onChange={handleFileUpload} 
               multiple 
+              accept=".pdf,application/pdf"
               ref={fileInputRef}
             />
           </label>
         </div>
 
-        {/* Document list and viewer */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Document list */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Documents</h2>
-            <ul className="space-y-4">
-              {documents.map((doc) => (
-                <li 
-                  key={doc.id} 
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-md cursor-pointer hover:bg-gray-100"
-                  onClick={() => handleDocumentSelect(doc)}
-                >
+        {/* Document grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredDocuments.map((doc) => (
+            <div 
+              key={doc.id}
+              className="relative group bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden border border-gray-200 dark:border-gray-700"
+            >
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center space-x-3">
-                    <FiFile className="w-5 h-5 text-indigo-600" />
-                    <span className="font-medium text-gray-700">{doc.name}</span>
+                    <div className="flex-shrink-0">
+                      <FiFile className="w-8 h-8 text-indigo-500" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-white truncate" title={doc.name}>
+                        {doc.name}
+                      </h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {formatFileSize(doc.size)}
+                      </p>
+                    </div>
                   </div>
+                </div>
+                
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDocumentDelete(doc);
-                    }}
-                    className="text-sm text-red-600 hover:text-red-800"
+                    onClick={() => handleDocumentSelect(doc)}
+                    className="inline-flex items-center px-3 py-1 text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
                   >
-                    <FiTrash2 />
+                    <FiExternalLink className="w-4 h-4 mr-1" />
+                    Open
                   </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Document viewer */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Document Viewer</h2>
-            {selectedDocument ? (
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium text-gray-900">{selectedDocument.name}</h3>
-                <p className="text-sm text-gray-600">Type: {selectedDocument.type}</p>
-                <p className="text-sm text-gray-600">Size: {formatFileSize(selectedDocument.size)}</p>
-                <p className="text-sm text-gray-600">Last modified: {selectedDocument.lastModified.toLocaleString()}</p>
-                <div className="border-t pt-4">
-                  <p className="text-sm text-gray-600">Document preview not available in this demo.</p>
+                  <button
+                    onClick={() => handleDocumentDelete(doc)}
+                    className="inline-flex items-center px-3 py-1 text-sm font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                  >
+                    <FiTrash2 className="w-4 h-4 mr-1" />
+                    Delete
+                  </button>
                 </div>
               </div>
-            ) : (
-              <p className="text-gray-600">Select a document to view its details</p>
-            )}
-          </div>
+            </div>
+          ))}
+          
+          {filteredDocuments.length === 0 && (
+            <div className="col-span-full text-center py-12">
+              <FiFile className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-lg font-medium text-gray-900 dark:text-white">No documents</h3>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {searchQuery ? 'No documents match your search.' : 'Upload PDF documents to get started.'}
+              </p>
+            </div>
+          )}
         </div>
-      </main>
-    </div>
-  )
-}
-
-function SidebarItem({ icon, text, href }: { icon: React.ReactNode; text: string; href: string }) {
-  return (
-    <li>
-      <Link href={href} className="flex items-center space-x-2 text-gray-600 hover:text-indigo-600 transition-colors">
-        {icon}
-        <span>{text}</span>
-      </Link>
-    </li>
+      </div>
+    </MainLayout>
   )
 }

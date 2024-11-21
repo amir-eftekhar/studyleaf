@@ -5,7 +5,7 @@ import { setupVectorSearch, insertEmbedding, vectorSearch, storeSystemPrompt, ge
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 async function generateSystemPrompt(sections: string[]) {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
   
   const prompt = `Analyze the following document sections and create an ideal system prompt for a chatbot that will answer questions about this document. The prompt should capture the key themes, tone, and purpose of the document:
 

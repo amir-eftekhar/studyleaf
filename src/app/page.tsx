@@ -3,13 +3,35 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { FiBook, FiHeadphones, FiFileText, FiLock, FiChrome, FiAward } from 'react-icons/fi'
 import Link from 'next/link'
-import logoSrc from './img/logo.svg'
 import Image from 'next/image'
+import { useTheme } from 'next-themes'
+import logoSrc from './img/logo.png'
+
+interface FeatureCardProps {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}
+
+interface TimelineProps {
+  steps: Array<{ title: string; description: string }>;
+}
+
+interface PricingCardProps {
+  title: string;
+  price: string;
+  period?: string;
+  features: string[];
+  ctaText: string;
+  ctaLink: string;
+  highlighted?: boolean;
+}
 
 export default function LandingPage() {
+  const { resolvedTheme } = useTheme()
+  const isDark = resolvedTheme === 'dark'
   const [isScrolled, setIsScrolled] = useState(false)
-  
-  
+
   useEffect(() => {
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 10)
@@ -257,25 +279,6 @@ export default function LandingPage() {
       </footer>
     </div>
   )
-}
-interface FeatureCardProps {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}
-
-interface TimelineProps {
-  steps: Array<{ title: string; description: string }>;
-}
-
-interface PricingCardProps {
-  title: string;
-  price: string;
-  period?: string;
-  features: string[];
-  ctaText: string;
-  ctaLink: string;
-  highlighted?: boolean;
 }
 
 function FeatureCard({ icon, title, description }: FeatureCardProps) {

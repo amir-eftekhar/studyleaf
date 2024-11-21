@@ -1,307 +1,211 @@
-import { MongoClient, ObjectId } from 'mongodb';
-import axios from 'axios';
-import * as pdfjsLib from 'pdfjs-dist';
-import path from 'path';
+import { MongoClient } from 'mongodb';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = path.resolve(process.cwd(), 'node_modules/pdfjs-dist/build/pdf.worker.min.js');
 
 const uri = process.env.MONGODB_URI!;
 const client = new MongoClient(uri);
-
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
-interface EmbeddingDocument {
-  _id: ObjectId;
-  content: string;
-  embedding: number[];
-  metadata: {
-    pageNumber: number;
-    documentId: string;
-    fileType: string;
-    createdAt: Date;
-  };
-}
+// Add caching for embeddings
+const embeddingCache = new Map<string, number[]>();
+const searchCache = new Map<string, any[]>();
 
-interface SystemPrompt {
-  _id: ObjectId;
+interface ProcessingStatus {
+  status: 'pending' | 'processing' | 'completed' | 'error';
+  processedSections: number;
+  totalSections: number;
+  error?: string;
   documentId: string;
-  prompt: string;
-  createdAt: Date;
-}
-
-interface Note {
-  _id: ObjectId;
-  documentId: string;
-  sectionId?: string;
-  content: string;
-  style: 'cornell' | 'bullet' | 'outline' | 'summary';
-  createdAt: Date;
   updatedAt: Date;
 }
 
-interface StreamNote extends Note {
-  previousContent: string;
-  streamPosition: number;
+interface EmbeddingDocument {
+  documentId: string;
+  content: string;
+  embedding: number[];
+  sectionNumber: number;
+  timestamp: Date;
 }
 
-interface LectureNote extends Note {
-  lectureId: string;
-  audioFilename: string;
-}
+async function generateEmbedding(text: string): Promise<number[]> {
+  const cacheKey = text;
+  if (embeddingCache.has(cacheKey)) {
+    return embeddingCache.get(cacheKey)!;
+  }
 
-async function generateEmbedding(text: string) {
-  console.log('Generating embedding for:', text.substring(0, 50) + '...');
   const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
   const result = await embeddingModel.embedContent(text);
-  const embedding = result.embedding;
-  console.log('Embedding generated, length:', embedding.values.length);
-  return embedding.values;
+  const embedding = result.embedding.values;
+  
+  embeddingCache.set(cacheKey, embedding);
+  return embedding;
 }
 
-export async function setupVectorSearch(documentId: string) {
-  console.log('Setting up vector search for document:', documentId);
+async function setupVectorSearch(documentId: string) {
   try {
     await client.connect();
     const db = client.db('pdf_database');
-    const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
-
-    // Check if embeddings already exist for this document
-    const existingEmbeddings = await embeddingsCollection.findOne({ "metadata.documentId": documentId });
-    if (existingEmbeddings) {
-      console.log('Embeddings already exist for this document');
-      return;
-    }
-
-    // Construct the full URL
-    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
-    const fullUrl = new URL(documentId, baseUrl).toString();
-    console.log('Fetching PDF from URL:', fullUrl);
-
-    // Fetch the PDF content
-    const response = await axios.get(fullUrl, { responseType: 'arraybuffer' });
-    const pdfData = new Uint8Array(response.data);
-    console.log('PDF data fetched, length:', pdfData.length);
-
-    // Load the PDF document
-    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-    const numPages = pdf.numPages;
-    console.log('PDF loaded, number of pages:', numPages);
-
-    let fullText = '';
-
-    // Extract text from each page and create embeddings
-    for (let i = 1; i <= numPages; i++) {
-      console.log(`Processing page ${i} of ${numPages}`);
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
-      fullText += pageText + ' ';
-
-      // Generate embedding for pageText
-      const embedding = await generateEmbedding(pageText);
-
-      await embeddingsCollection.insertOne({
-        content: pageText,
-        embedding: embedding,
-        metadata: {
-          pageNumber: i,
-          documentId,
-          fileType: 'pdf',
-          createdAt: new Date()
-        },
-        _id: new ObjectId()
-      });
-    }
-
-    // Store the full text of the document
-    const documentsCollection = db.collection('documents');
-    await documentsCollection.updateOne(
-      { documentId },
-      { $set: { fullText, createdAt: new Date() } },
-      { upsert: true }
-    );
-
-    console.log('Vector search setup completed for document:', documentId);
+    
+    // Create indexes if they don't exist
+    await db.collection('embeddings').createIndex({ documentId: 1 });
+    await db.collection('embeddings').createIndex({ 
+      documentId: 1,
+      sectionNumber: 1 
+    });
+    
+    // Clear existing embeddings for this document
+    await db.collection('embeddings').deleteMany({ documentId });
+    
+    // Initialize processing status
+    await updateProcessingStatus(documentId, 'pending', 0, 0);
+    
+    console.log('Vector search setup completed for:', documentId);
   } catch (error) {
-    console.error('Error in setupVectorSearch:', error);
+    console.error('Error setting up vector search:', error);
     throw error;
   }
 }
 
-export async function insertEmbedding(content: string, embedding: number[], metadata: Omit<EmbeddingDocument['metadata'], 'createdAt'>) {
-  const db = client.db('pdf_database');
-  const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
-
-  await embeddingsCollection.insertOne({
-    content,
-    embedding,
-    metadata: { ...metadata, createdAt: new Date() },
-    _id: new ObjectId()
-  });
-}
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  const dotProduct = a.reduce((sum, _, i) => sum + a[i] * b[i], 0);
-  const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dotProduct / (magnitudeA * magnitudeB);
-}
-
-export async function vectorSearch(queryEmbedding: number[], limit: number = 5, documentId?: string) {
-  const db = client.db('pdf_database');
-  const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
-
-  let pipeline = [];
-
-  if (documentId) {
-    pipeline.push({ $match: { "metadata.documentId": documentId } });
-  }
-
-  pipeline.push({
-    $addFields: {
-      similarity: {
-        $reduce: {
-          input: { $range: [0, { $size: "$embedding" }] },
-          initialValue: 0,
-          in: {
-            $add: [
-              "$$value",
-              { $multiply: [{ $arrayElemAt: ["$embedding", "$$this"] }, { $arrayElemAt: [queryEmbedding, "$$this"] }] }
-            ]
-          }
-        }
-      }
-    }
-  });
-
-  pipeline.push({ $sort: { similarity: -1 } });
-  pipeline.push({ $limit: limit });
-
-  pipeline.push({
-    $project: {
-      content: 1,
-      metadata: 1,
-      score: "$similarity"
-    }
-  });
-
-  const results = await embeddingsCollection.aggregate(pipeline).toArray();
-  return results;
-}
-
-export async function wordSearch(query: string, limit: number = 5, documentId?: string) {
-  const db = client.db('pdf_database');
-  const embeddingsCollection = db.collection<EmbeddingDocument>('embeddings');
-
-  const filter = documentId ? { "metadata.documentId": documentId, $text: { $search: query } } : { $text: { $search: query } };
-
-  const results = await embeddingsCollection.find(
-    filter,
-    { projection: { content: 1, metadata: 1, score: { $meta: "textScore" } } }
-  ).sort({ score: { $meta: "textScore" } }).limit(limit).toArray();
-
-  return results;
-}
-
-export async function storeSystemPrompt(documentId: string, prompt: string) {
-  const db = client.db('pdf_database');
-  const systemPromptsCollection = db.collection<SystemPrompt>('system_prompts');
-
-  await systemPromptsCollection.updateOne(
-    { documentId },
-    { $set: { prompt, createdAt: new Date() } },
-    { upsert: true }
-  );
-}
-
-export async function getSystemPrompt(documentId: string): Promise<string | null> {
-  const db = client.db('pdf_database');
-  const systemPromptsCollection = db.collection<SystemPrompt>('system_prompts');
-
-  const result = await systemPromptsCollection.findOne({ documentId });
-  return result ? result.prompt : null;
-}
-
-export async function getDocumentContent(documentId: string): Promise<string | null> {
-  const db = client.db('pdf_database');
-  const documentsCollection = db.collection('documents');
-
-  const document = await documentsCollection.findOne({ documentId });
-  return document ? document.fullText : null;
-}
-
-export async function closeConnection() {
+async function insertEmbedding(
+  documentId: string, 
+  content: string, 
+  embedding: number[],
+  sectionNumber: number
+) {
   try {
-    await client.close();
+    await client.connect();
+    const db = client.db('pdf_database');
+    
+    const embeddingDoc: EmbeddingDocument = {
+      documentId,
+      content,
+      embedding,
+      sectionNumber,
+      timestamp: new Date()
+    };
+
+    await db.collection<EmbeddingDocument>('embeddings').updateOne(
+      { documentId, sectionNumber },
+      { $set: embeddingDoc },
+      { upsert: true }
+    );
   } catch (error) {
-    console.error('Error closing MongoDB connection:', error);
+    console.error('Error inserting embedding:', error);
+    throw error;
   }
 }
 
-export async function storeNote(note: Omit<Note, '_id' | 'createdAt' | 'updatedAt'>) {
-  const db = client.db('pdf_database');
-  const notesCollection = db.collection<Note>('notes');
+async function getVectorStore(documentId: string) {
+  try {
+    await client.connect();
+    const db = client.db('pdf_database');
 
-  const now = new Date();
-  await notesCollection.insertOne({
-    ...note,
-    _id: new ObjectId(),
-    createdAt: now,
-    updatedAt: now,
-  });
+    return {
+      async similaritySearch(query: string, k: number = 5) {
+        const cacheKey = `${documentId}:${query}:${k}`;
+        if (searchCache.has(cacheKey)) {
+          return searchCache.get(cacheKey)!;
+        }
+
+        const queryEmbedding = await generateEmbedding(query);
+        
+        const results = await db.collection('embeddings')
+          .aggregate([
+            { $match: { documentId } },
+            {
+              $addFields: {
+                similarity: {
+                  $reduce: {
+                    input: { $range: [0, { $size: "$embedding" }] },
+                    initialValue: 0,
+                    in: {
+                      $add: [
+                        "$$value",
+                        { $multiply: [
+                          { $arrayElemAt: ["$embedding", "$$this"] },
+                          { $arrayElemAt: [queryEmbedding, "$$this"] }
+                        ]}
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            { $sort: { similarity: -1 } },
+            { $limit: k },
+            { $project: { content: 1, similarity: 1 } }
+          ]).toArray();
+
+        searchCache.set(cacheKey, results);
+        return results;
+      }
+    };
+  } catch (error) {
+    console.error('Error getting vector store:', error);
+    return null;
+  }
 }
 
-export async function updateStreamNote(documentId: string, content: string, previousContent: string, streamPosition: number) {
-  const db = client.db('pdf_database');
-  const streamNotesCollection = db.collection<StreamNote>('stream_notes');
-
-  const now = new Date();
-  await streamNotesCollection.updateOne(
-    { documentId },
-    {
-      $set: {
-        content,
-        previousContent,
-        streamPosition,
-        updatedAt: now,
+async function updateProcessingStatus(
+  documentId: string,
+  status: ProcessingStatus['status'],
+  totalSections: number,
+  processedSections: number,
+  error?: string
+) {
+  try {
+    await client.connect();
+    const db = client.db('pdf_database');
+    
+    await db.collection('processing_status').updateOne(
+      { documentId },
+      { 
+        $set: {
+          documentId,
+          status,
+          totalSections,
+          processedSections,
+          error,
+          updatedAt: new Date()
+        }
       },
-    },
-    { upsert: true }
-  );
+      { upsert: true }
+    );
+  } catch (error) {
+    console.error('Error updating processing status:', error);
+    throw error;
+  }
 }
 
-export async function getLatestStreamNote(documentId: string): Promise<StreamNote | null> {
-  const db = client.db('pdf_database');
-  const streamNotesCollection = db.collection<StreamNote>('stream_notes');
+async function getProcessingStatus(documentId: string): Promise<ProcessingStatus | null> {
+  try {
+    await client.connect();
+    const db = client.db('pdf_database');
+    
+    const result = await db.collection('processing_status').findOne({ documentId });
+    
+    if (!result) return null;
 
-  return streamNotesCollection.findOne({ documentId }, { sort: { streamPosition: -1 } });
+    // Transform the MongoDB document into ProcessingStatus type
+    return {
+      status: result.status as ProcessingStatus['status'],
+      processedSections: result.processedSections,
+      totalSections: result.totalSections,
+      documentId: result.documentId,
+      updatedAt: new Date(result.updatedAt),
+      error: result.error
+    };
+  } catch (error) {
+    console.error('Error getting processing status:', error);
+    return null;
+  }
 }
 
-export async function getNotes(documentId: string, sectionId?: string): Promise<Note[]> {
-  const db = client.db('pdf_database');
-  const notesCollection = db.collection<Note>('notes');
-
-  const query = sectionId ? { documentId, sectionId } : { documentId };
-  return notesCollection.find(query).sort({ createdAt: 1 }).toArray();
-}
-
-export async function storeLectureNote(note: Omit<LectureNote, '_id' | 'createdAt' | 'updatedAt'>) {
-  const db = client.db('pdf_database');
-  const lectureNotesCollection = db.collection<LectureNote>('lecture_notes');
-
-  const now = new Date();
-  await lectureNotesCollection.insertOne({
-    ...note,
-    _id: new ObjectId(),
-    createdAt: now,
-    updatedAt: now,
-  });
-}
-
-export async function getLectureNotes(lectureId: string): Promise<LectureNote[]> {
-  const db = client.db('pdf_database');
-  const lectureNotesCollection = db.collection<LectureNote>('lecture_notes');
-
-  return lectureNotesCollection.find({ lectureId }).sort({ createdAt: 1 }).toArray();
-}
+// Export all functions in a single export statement
+export {
+  generateEmbedding,
+  setupVectorSearch,
+  insertEmbedding,
+  getVectorStore,
+  updateProcessingStatus,
+  getProcessingStatus
+};
