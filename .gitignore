@@ -13,6 +13,10 @@
 /.next/
 /out/
 ./public/uploads
+/public/uploads/
+uploads/
+public/uploads/
+public/uploads/*
 # production
 /build
 
@@ -31,7 +35,9 @@ yarn-error.log*
 
 # vercel
 .vercel
+/tmp
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
