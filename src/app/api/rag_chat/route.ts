@@ -55,64 +55,30 @@ async function findRelevantSections(query: string, documents: EmbeddingDocument[
 
 async function generateResponse(query: string, context: string[]): Promise<string> {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    
-    // First, analyze the document context to determine its subject matter
-    const analysisPrompt = `
-      Analyze this content and tell me in one word what subject or field it's about:
-      ${context.join('\n').substring(0, 1000)}
-    `;
-    
-    const analysisResult = await model.generateContent(analysisPrompt);
-    const subject = analysisResult.response.text().trim().toLowerCase();
-    
-    // If the query is asking for questions
-    if (query.toLowerCase().includes('ask') && query.toLowerCase().includes('question')) {
-      const prompt = `
-        You are an expert ${subject} tutor. Based on this content:
-        ---------------------
-        ${context.join('\n\n')}
-        ---------------------
-
-        Generate 3-4 detailed questions that test understanding of the key concepts from this specific content.
-        For each question:
-        1. Write a clear, specific question about the content
-        2. Explain why understanding this concept is important in ${subject}
-        3. Provide the correct answer with a detailed explanation using examples from the content
-
-        Format your response in markdown with:
-        - Questions in bold
-        - Important terms highlighted
-        - Clear section breaks between questions
-        - Numbered lists for multi-part explanations
-      `;
-
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      return response.text();
-    }
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
     
     // For regular queries
     const prompt = `
-      You are an expert ${subject} tutor. Use this specific content to answer the question:
+      You are an expert tutor. Based on this content:
       ---------------------
       ${context.join('\n\n')}
       ---------------------
+
       Question: ${query}
       
       Instructions:
-      1. If the answer cannot be found in the provided content, say "I cannot find information about that in the document."
-      2. Base your answer ONLY on the provided content, not on general knowledge
-      3. Use direct references from the content to support your answer
-      4. Format your response in markdown:
+      1. Base your answer ONLY on the provided content, not on general knowledge
+      2. Use direct references from the content to support your answer
+      3. Format your response in markdown:
          - Use **bold** for key terms and concepts
          - Use bullet points for lists
          - Include specific examples from the content
          - Use quotes when directly citing the content
-      5. Make your explanation clear and appropriate for a ${subject} student
-      6. If relevant, explain how this connects to other concepts mentioned in the content
+      4. Make your explanation clear and appropriate for a student
+      5. If relevant, explain how this connects to other concepts mentioned in the content
+      6. If you cannot find the answer in the content, say so clearly
       
-      Provide a well-structured response that shows understanding of the specific ${subject} concepts from this document.
+      Provide a well-structured response that shows understanding of the specific concepts from this document.
     `;
 
     const result = await model.generateContent(prompt);
@@ -129,28 +95,19 @@ export async function POST(request: NextRequest) {
     const { documentId, message } = await request.json();
     console.log('Processing chat request:', { documentId, messageLength: message?.length });
 
-    if (!documentId || !message) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    if (!documentId || !message?.trim()) {
+      return NextResponse.json({ error: 'Document ID and message are required' }, { status: 400 });
     }
 
-    const cacheKey = `${documentId}:${message}`;
-    if (responseCache.has(cacheKey)) {
-      return NextResponse.json({ response: responseCache.get(cacheKey) });
-    }
-
-    // Initialize both vector store and model in parallel
-    const [vectorStore, modelPromise] = await Promise.all([
-      getVectorStore(documentId),
-      model.generateContent('') // Warm up the model
-    ]);
-
-    if (!vectorStore || vectorStore.length === 0) {
-      return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+    // Get stored embeddings
+    const documents = await getVectorStore(documentId);
+    if (!documents || documents.length === 0) {
+      return NextResponse.json({ error: 'Document not found or not processed' }, { status: 404 });
     }
 
     try {
-      // No need for type assertion since vectorStore is properly typed now
-      const searchResults = await findRelevantSections(message, vectorStore);
+      // Find relevant sections
+      const searchResults = await findRelevantSections(message, documents);
       
       if (searchResults.length === 0) {
         return NextResponse.json({ 
@@ -164,7 +121,6 @@ export async function POST(request: NextRequest) {
       // Generate response using the context
       const response = await generateResponse(message, context);
       
-      responseCache.set(cacheKey, response);
       return NextResponse.json({ response });
 
     } catch (error) {

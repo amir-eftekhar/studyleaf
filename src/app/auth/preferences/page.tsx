@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
-import { FiBook, FiClock, FiTarget, FiBrain, FiSliders, FiBell } from 'react-icons/fi'
+
 import axios from 'axios'
 
 const academicLevels = [

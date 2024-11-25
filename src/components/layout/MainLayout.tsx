@@ -1,12 +1,14 @@
 'use client'
 import React, { useState, useEffect, ReactElement } from 'react';
 import { FiMenu, FiX, FiSearch, FiSun, FiMoon, FiBell, FiHome, FiBook, FiFileText, 
-  FiMic, FiUsers, FiCalendar, FiLayers, FiBookOpen, FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiSettings, FiRepeat } from 'react-icons/fi';
+  FiMic, FiUsers, FiCalendar, FiLayers, FiBookOpen, FiLogOut, FiChevronLeft, FiChevronRight, FiUser, FiSettings, FiRepeat, FiYoutube, FiLink } from 'react-icons/fi';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useTheme } from 'next-themes';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { signOut } from 'next-auth/react';
+import { FaDiscord } from 'react-icons/fa';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -51,13 +53,15 @@ export default function MainLayout({ children, showSearch = true }: MainLayoutPr
   };
 
   const sidebarItems = [
-    { icon: <FiHome />, text: "Dashboard", href: "/", active: true },
+    { icon: <FiHome />, text: "Home", href: "/home", active: false },
     { icon: <FiBook />, text: "Library", href: "/library", active: false },
-    { icon: <FiRepeat />, text: "Swipe to Learn", href: "/swipe-learn", active: false },
+    { icon: <FiRepeat />, text: "Swipe to learn", href: "/swipe-learn", active: false },
     { icon: <FiFileText />, text: "My Notes", href: "/notes", active: false },
     { icon: <FiMic />, text: "Lecture", href: "/lecture", active: false },
     { icon: <FiUsers />, text: "Classes", href: "/classes", active: false },
-    { icon: <FiCalendar />, text: "Schedule", href: "/schedule", active: false }
+    { icon: <FiCalendar />, text: "Schedule", href: "/schedule", active: false },
+    { icon: <FiRepeat />, text: "Sets", href: "/swipe-learn", active: false },
+    { icon: <FaDiscord />, text: "Discord", href: "https://discord.gg/VudhSYgasy", active: false }
   ];
 
   useEffect(() => {
@@ -139,8 +143,16 @@ export default function MainLayout({ children, showSearch = true }: MainLayoutPr
     );
   };
 
+  const handleLogout = async () => {
+    // Delete login token and sign out
+    await signOut({ redirect: true, callbackUrl: '/login' });
+  };
+
   return (
     <div className={`min-h-screen ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
+      {/* Header */}
+      
+
       <div className="flex flex-1 h-screen">
         {/* Sidebar */}
         <aside className={`
@@ -183,7 +195,7 @@ export default function MainLayout({ children, showSearch = true }: MainLayoutPr
           </button>
 
           {/* Navigation */}
-          <nav className="mt-6 px-4">
+          <nav className="mt-1 px-4">
             {/* Main Navigation */}
             <div className="space-y-1">
               {sidebarItems.map((item) => (
@@ -365,8 +377,10 @@ export default function MainLayout({ children, showSearch = true }: MainLayoutPr
         />
       )}
 
-      {/* Add this before the final closing div */}
-      <footer className={`${isDark ? 'bg-gray-800/90' : 'bg-white/90'} border-t border-gray-700 backdrop-blur-sm`}>
+      {/* Footer */}
+      <footer className={`${isDark ? 'bg-gray-800' : 'bg-white'} border-t ${
+        isDark ? 'border-gray-700' : 'border-gray-200'
+      }`}>
         <div className="max-w-7xl mx-auto px-6 py-12">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
             {/* Company Info */}
@@ -407,10 +421,18 @@ export default function MainLayout({ children, showSearch = true }: MainLayoutPr
                 Contact Us
               </h3>
               <ul className={`text-sm space-y-2 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
-                <li>support@studyleaf.com</li>
-                <li>1-800-STUDYLEAF</li>
-                <li>Twitter: @studyleaf</li>
-                <li>Discord Community</li>
+                <li>trivalleytechnology@gmail.com</li>
+                <a
+                  href="https://discord.gg/VudhSYgasy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`flex items-center space-x-2 ${
+                    isDark ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <FaDiscord className="w-5 h-5" />
+                  <span>Join our Discord</span>
+                </a>
               </ul>
             </div>
           </div>
@@ -433,8 +455,13 @@ export default function MainLayout({ children, showSearch = true }: MainLayoutPr
               </div>
             </div>
           </div>
+
+          <div className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+            Developed by Amir Eftekhar and Nikilesh Suravarjjala
+          </div>
         </div>
       </footer>
     </div>
   );
 } 
+

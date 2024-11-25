@@ -3,8 +3,9 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { writeFile } from 'fs/promises';
 import path from 'path';
-import { FileService } from '@/lib/fileService';
 import fs from 'fs/promises';
+import { v4 as uuidv4 } from 'uuid';
+import { FileService } from '@/lib/fileService';
 
 export async function POST(request: Request) {
   try {
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 
-    // Create unique filename
+    // Create unique filename with UUID
     const timestamp = Date.now();
     const filename = `${timestamp}_${file.name}`;
     const filepath = `/uploads/${filename}`;
@@ -33,55 +34,27 @@ export async function POST(request: Request) {
       await fs.mkdir(fullPath, { recursive: true });
     }
 
-    // Save file
+    // Save file to uploads folder
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
     await writeFile(path.join(fullPath, filename), buffer);
 
-    // Create file asset record
-    const fileAsset = await FileService.createFile({
+    // Create file record using FileService
+    const fileDoc = await FileService.createFile({
       userId: session.user.id,
-      documentId: timestamp.toString(),
-      originalName: file.name,
-      fileName: filename,
-      filePath: filepath,
-      fileType: 'pdf',
-      fileSize: buffer.length,
-      uploadDate: new Date(),
-      lastAccessed: new Date(),
-      isProcessed: false,
-      processingStatus: 'pending',
-      metadata: {
-        mimeType: file.type,
-        encoding: 'utf-8'
-      },
-      tags: [],
-      isArchived: false,
+      name: file.name,
+      path: filepath,
+      size: buffer.length,
+      type: file.type,
+      uploadedAt: new Date(),
       isDeleted: false
     });
 
-    // Start processing immediately
-    try {
-      const processResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/rag_chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documentId: filepath,
-          message: 'Initialize processing'
-        }),
-      });
-
-      if (!processResponse.ok) {
-        console.error('Failed to start processing:', await processResponse.text());
-      }
-    } catch (error) {
-      console.error('Error starting processing:', error);
-    }
+    console.log('Created file document:', fileDoc); // Add logging
 
     return NextResponse.json({ 
-      fileAsset,
-      status: 'processing',
-      message: 'File uploaded and processing started'
+      success: true,
+      file: fileDoc
     });
 
   } catch (error) {

@@ -124,7 +124,9 @@ export default function LandingPage() {
 
         <section id="features" className="py-20 bg-white">
           <div className="container mx-auto px-4">
-            <h2 className="text-4xl font-bold text-center mb-12">Powerful Features</h2>
+            <h2 className="text-4xl font-bold text-center mb-12 text-gray-900">
+              Powerful Features
+            </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
               <FeatureCard
                 icon={<FiHeadphones className="w-8 h-8" />}
@@ -162,7 +164,7 @@ export default function LandingPage() {
 
         <section id="how-it-works" className="py-20 bg-gradient-to-br from-indigo-100 to-purple-100">
           <div className="container mx-auto px-4">
-            <h2 className="text-4xl font-bold text-center mb-12">How It Works</h2>
+            <h2 className="text-4xl font-bold text-center mb-12 text-gray-900">How It Works</h2>
             <div className="max-w-3xl mx-auto">
               <Timeline
                 steps={[
@@ -177,51 +179,137 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section id="pricing" className="py-20 bg-white">
-          <div className="container mx-auto px-4">
-            <h2 className="text-4xl font-bold text-center mb-12">Choose Your Plan</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 max-w-5xl mx-auto">
-              <PricingCard
-                title="Free"
-                price="$0"
-                features={[
-                  "Basic note-taking features",
-                  "Limited daily study materials",
-                  "Community access",
-                  "Ad-supported",
-                ]}
-                ctaText="Get Started"
-                ctaLink="/auth?auth=signup"
-              />
-              <PricingCard
-                title="Pro"
-                price="$4.99"
-                period="month"
-                features={[
-                  "Advanced note-taking with AI",
-                  "Unlimited personalized study materials",
-                  "Private content option",
-                  "Ad-free experience",
-                  "Priority support",
-                ]}
-                ctaText="Upgrade to Pro"
-                ctaLink="/auth?auth=signup"
-                highlighted={true}
-              />
-              <PricingCard
-                title="Team"
-                price="$9.99"
-                period="month"
-                features={[
-                  "All Pro features",
-                  "Collaborative workspaces",
-                  "Team analytics",
-                  "Admin controls",
-                  "API access",
-                ]}
-                ctaText="Continue"
-                ctaLink="/auth?auth=signup"
-              />
+        <section className="py-20 bg-white">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center">
+              <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl">
+                Simple, transparent pricing
+              </h2>
+              <p className="mt-4 text-xl text-gray-600">
+                Choose the plan that best fits your needs
+              </p>
+            </div>
+
+            <div className="mt-16 grid gap-8 lg:grid-cols-3 lg:gap-x-8">
+              {/* Free Tier */}
+              <div className="relative p-8 bg-white border-2 border-indigo-200 rounded-2xl shadow-sm flex flex-col">
+                <div className="flex-1">
+                  <h3 className="text-xl font-semibold text-gray-900">Beta Access</h3>
+                  <div className="absolute top-0 right-0 -translate-y-1/2 transform">
+                    <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-indigo-100 text-indigo-800 rounded-full">
+                      Limited Time
+                    </span>
+                  </div>
+                  <p className="mt-4 flex items-baseline text-gray-900">
+                    <span className="text-5xl font-extrabold tracking-tight">$0</span>
+                    <span className="ml-1 text-xl font-semibold">/month</span>
+                  </p>
+                  <p className="mt-6 text-gray-500">
+                    Early access to most features for a limited number of users
+                  </p>
+
+                  <ul className="mt-6 space-y-4">
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Create study sets</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Swipe to learn</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Basic AI quiz generation</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Limited PDF uploads</span>
+                    </li>
+                  </ul>
+                </div>
+                <Link href="/auth" 
+                  className="mt-8 block w-full bg-indigo-600 text-center py-3 px-6 border border-transparent rounded-md text-white font-medium hover:bg-indigo-700">
+                  Get Started
+                </Link>
+              </div>
+
+              {/* Plus Tier */}
+              <div className="relative p-8 bg-white border-2 border-indigo-500 rounded-2xl shadow-sm flex flex-col">
+                <div className="flex-1">
+                  <h3 className="text-xl font-semibold text-gray-900">Plus</h3>
+                  <div className="absolute top-0 right-0 -translate-y-1/2 transform">
+                    <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-indigo-100 text-indigo-800 rounded-full">
+                      Coming Soon
+                    </span>
+                  </div>
+                  <p className="mt-4 flex items-baseline text-gray-900">
+                    <span className="text-5xl font-extrabold tracking-tight">$6.99</span>
+                    <span className="ml-1 text-xl font-semibold">/month</span>
+                  </p>
+
+                  <ul className="mt-6 space-y-4">
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Everything in Free</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Advanced AI quiz generation</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Unlimited PDF uploads</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">AI study recommendations</span>
+                    </li>
+                  </ul>
+                </div>
+                <Link href="/auth" 
+                  className="mt-8 block w-full bg-indigo-600 text-center py-3 px-6 border border-transparent rounded-md text-white font-medium hover:bg-indigo-700">
+                  Join Waitlist
+                </Link>
+              </div>
+
+              {/* Pro Tier */}
+              <div className="relative p-8 bg-white border-2 border-gray-200 rounded-2xl shadow-sm flex flex-col">
+                <div className="flex-1">
+                  <h3 className="text-xl font-semibold text-gray-900">Pro</h3>
+                  <div className="absolute top-0 right-0 -translate-y-1/2 transform">
+                    <span className="inline-flex items-center px-3 py-1 text-sm font-medium bg-indigo-100 text-indigo-800 rounded-full">
+                      Coming Soon
+                    </span>
+                  </div>
+                  <p className="mt-4 flex items-baseline text-gray-900">
+                    <span className="text-5xl font-extrabold tracking-tight">$9.99</span>
+                    <span className="ml-1 text-xl font-semibold">/month</span>
+                  </p>
+
+                  <ul className="mt-6 space-y-4">
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Everything in Plus</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">AI lecture note generation</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Advanced analytics</span>
+                    </li>
+                    <li className="flex items-center">
+                      <span className="text-green-500">✓</span>
+                      <span className="ml-3 text-gray-900">Priority support</span>
+                    </li>
+                  </ul>
+                </div>
+                <Link href="/auth" 
+                  className="mt-8 block w-full bg-indigo-600 text-center py-3 px-6 border border-transparent rounded-md text-white font-medium hover:bg-indigo-700">
+                  Join Waitlist
+                </Link>
+              </div>
             </div>
           </div>
         </section>
@@ -290,7 +378,9 @@ function FeatureCard({ icon, title, description }: FeatureCardProps) {
       className="bg-white p-6 rounded-lg shadow-lg hover:shadow-xl transition-shadow"
     >
       <div className="text-indigo-600 mb-4">{icon}</div>
-      <h3 className="text-xl font-semibold mb-2">{title}</h3>
+      <h3 className="text-xl font-semibold mb-2 text-gray-900">
+        {title}
+      </h3>
       <p className="text-gray-600">{description}</p>
     </motion.div>
   )
@@ -314,7 +404,9 @@ function Timeline({ steps }: TimelineProps) {
             {index < steps.length - 1 && <div className="w-px h-full bg-indigo-600 mt-2"></div>}
           </div>
           <div>
-            <h3 className="text-xl font-semibold mb-2">{step.title}</h3>
+            <h3 className="text-xl font-semibold mb-2 text-gray-900">
+              {step.title}
+            </h3>
             <p className="text-gray-600">{step.description}</p>
           </div>
         </motion.div>

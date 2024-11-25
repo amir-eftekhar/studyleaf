@@ -421,7 +421,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
       console.log('Starting document processing for:', { documentId });
 
       // First, initiate processing
-      const processResponse = await fetch('/api/rag', {  // Changed to /api/rag endpoint
+      const processResponse = await fetch('/api/RAG', {  // Changed to /api/rag endpoint
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1102,7 +1102,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
       console.log('Sending question to RAG endpoint:', question);
       console.log('Document URL:', pdfUrl);
       
-      const response = await fetch('/api/rag', {
+      const response = await fetch('/api/RAG', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1151,7 +1151,7 @@ const PDFAIPanel: React.FC<PDFAIPanelProps> = ({
     setIsPollingStatus(true);
     
     try {
-      const response = await fetch('/api/rag', {
+      const response = await fetch('/api/RAG', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

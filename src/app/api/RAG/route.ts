@@ -69,34 +69,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Document content and ID are required' }, { status: 400 });
     }
 
-    // Check if document is already processed
-    const db = client.db('pdf_database');
-    const statusCollection = db.collection('processing_status');
-    const existingStatus = await statusCollection.findOne({ documentId });
-    
-    if (existingStatus && existingStatus.status === 'completed') {
-      console.log('Document already processed:', documentId);
-      return NextResponse.json({ 
-        success: true,
-        message: 'Document already processed',
-        totalSections: existingStatus.totalSections,
-        processedSections: existingStatus.processedSections
-      });
-    }
-
-    // Initialize processing status only if not already processing
-    if (!existingStatus || existingStatus.status === 'error') {
-      await setupVectorSearch(documentId);
-    } else if (existingStatus.status === 'processing') {
-      return NextResponse.json({ 
-        success: true,
-        message: 'Document processing in progress',
-        totalSections: existingStatus.totalSections,
-        processedSections: existingStatus.processedSections
-      });
-    }
-
-    // Split document into sections
+    // Process sections with better error handling
     const sections = splitIntoSections(documentContent);
     if (sections.length === 0) {
       throw new Error('No valid sections found in document');
@@ -105,31 +78,22 @@ export async function POST(request: Request) {
     console.log(`Processing ${sections.length} sections...`);
     await updateProcessingStatus(documentId, 'processing', sections.length, 0);
 
-    // Process sections in parallel with a concurrency limit
-    const concurrencyLimit = 3;
+    // Process sections sequentially to avoid overwhelming the API
     let processedCount = 0;
-
-    for (let i = 0; i < sections.length; i += concurrencyLimit) {
-      const chunk = sections.slice(i, Math.min(i + concurrencyLimit, sections.length));
-      
-      await Promise.all(chunk.map(async (section, index) => {
-        try {
-          const embedding = await generateEmbedding(section);
-          await insertEmbedding(documentId, section, embedding, i + index + 1);
-          processedCount++;
-          await updateProcessingStatus(documentId, 'processing', sections.length, processedCount);
-          console.log(`Processed section ${processedCount}/${sections.length}`);
-        } catch (error) {
-          console.error('Error processing section:', error);
-          throw error;
-        }
-      }));
+    for (const section of sections) {
+      try {
+        const embedding = await generateEmbedding(section);
+        await insertEmbedding(documentId, section, embedding, processedCount + 1);
+        processedCount++;
+        await updateProcessingStatus(documentId, 'processing', sections.length, processedCount);
+        console.log(`Processed section ${processedCount}/${sections.length}`);
+      } catch (error) {
+        console.error('Error processing section:', error);
+        throw error;
+      }
     }
 
-    // Mark as completed
     await updateProcessingStatus(documentId, 'completed', sections.length, sections.length);
-    console.log('Document processing completed successfully');
-
     return NextResponse.json({ 
       success: true,
       totalSections: sections.length,
@@ -139,17 +103,10 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Error in document processing:', error);
     if (currentDocumentId) {
-      await updateProcessingStatus(
-        currentDocumentId, 
-        'error',
-        0,
-        0,
+      await updateProcessingStatus(currentDocumentId, 'error', 0, 0, 
         error instanceof Error ? error.message : 'Unknown error'
       );
     }
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to process document' }, { status: 500 });
   }
 }

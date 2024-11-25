@@ -262,7 +262,7 @@ export default function LibraryPage() {
     }
   }
 
-  const filteredDocuments = documents.filter(doc =>
+  const filteredDocuments = (documents || []).filter(doc =>
     doc.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 

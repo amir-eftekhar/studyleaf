@@ -2,62 +2,45 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { FileService } from '@/lib/fileService';
+import type { FileDocument } from '@/types/files';
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
+    
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    
+    const userId = session.user.id || (session.user as any).userId;
+    if (!userId) {
+      console.error('No user ID found in session:', session);
+      return NextResponse.json({ error: 'User ID not found' }, { status: 400 });
+    }
+    
+    console.log('Fetching files for user:', userId);
+    const files = await FileService.getFilesByUserId(userId);
+    console.log('Found files:', files);
+    
+    if (!files || files.length === 0) {
+      return NextResponse.json({ documents: [] });
+    }
 
-    // Get all documents for the user
-    const documents = await FileService.getFilesByUser(session.user.id);
-
-    // Transform the documents to match the expected format in the library
-    const transformedDocuments = documents.map(doc => ({
-      id: doc._id,
-      name: doc.originalName,
-      type: doc.fileType,
-      size: doc.fileSize,
-      lastModified: doc.lastAccessed,
-      url: doc.filePath,
-      status: doc.processingStatus,
-      processingProgress: 0, // You might want to calculate this based on your processing status
-      uploadDate: doc.uploadDate
+    const documents = files.map((file: FileDocument) => ({
+      id: file._id,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      lastModified: file.uploadedAt,
+      url: file.path,
+      status: 'completed',
+      processingProgress: 100
     }));
 
-    return NextResponse.json({ documents: transformedDocuments });
+    console.log('Transformed documents:', documents);
+    return NextResponse.json({ documents });
   } catch (error) {
     console.error('Error fetching documents:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch documents' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function DELETE(request: Request) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const documentId = searchParams.get('id');
-
-    if (!documentId) {
-      return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
-    }
-
-    await FileService.deleteFile(documentId);
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting document:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete document' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 
