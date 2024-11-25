@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getSignedFileUrl } from '@/lib/s3';
-import { connectToDatabase } from '@/lib/mongodb'
+import { connectToDatabase } from '@/lib/mongodb';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
   try {
@@ -11,7 +13,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const files = await connectToDatabase().then(db => db.collection('files').find({ userId: session.user.id }).toArray());
+    const { db } = await connectToDatabase();
+    const files = await db.collection('files')
+      .find({ userId: session.user.id })
+      .toArray();
 
     // Generate signed URLs for each file
     const filesWithUrls = await Promise.all(

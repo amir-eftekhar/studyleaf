@@ -109,7 +109,7 @@ export async function DELETE(
         $pull: { 
           studySetIds: { 
             $in: studySetIds.map((id: string) => new ObjectId(id))
-          }
+          } as any
         },
         $set: { updatedAt: new Date() }
       }

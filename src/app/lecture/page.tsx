@@ -26,6 +26,50 @@ import { useToast } from '@/components/ui/use-toast';
 
 type NoteType = 'summary' | 'detailed' | 'outline' | 'cornell';
 
+// Add these type definitions at the top of the file
+interface SpeechRecognitionEvent extends Event {
+  results: {
+    [index: number]: {
+      isFinal: boolean;
+      [index: number]: {
+        transcript: string;
+        confidence: number;
+      };
+    };
+  } & {
+    length: number;
+  };
+  resultIndex: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+  message: string;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onerror: (event: SpeechRecognitionErrorEvent) => void;
+  onresult: (event: SpeechRecognitionEvent) => void;
+  onend: () => void;
+}
+
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognition;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: SpeechRecognitionConstructor;
+    webkitSpeechRecognition: SpeechRecognitionConstructor;
+  }
+}
+
 export default function LecturePage() {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
@@ -43,82 +87,91 @@ export default function LecturePage() {
   const [selectedNoteType, setSelectedNoteType] = useState<NoteType>('detailed');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const [recognition, setRecognition] = useState<SpeechRecognition | null>(null);
+  const [interimTranscript, setInterimTranscript] = useState('');
 
   useEffect(() => {
-    return () => {
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.stop();
-      }
-    };
-  }, [isRecording]);
+    // Initialize Web Speech API
+    if ('webkitSpeechRecognition' in window) {
+      const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const result = event.results[i];
+          const transcriptText = result[0].transcript;
+          
+          if (result.isFinal) {
+            finalTranscript += transcriptText;
+            setTranscript(prev => prev + ' ' + finalTranscript);
+          } else {
+            interimTranscript += transcriptText;
+            setInterimTranscript(interimTranscript);
+          }
         }
       };
 
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        setFile(new File([audioBlob], 'recorded-lecture.wav', { type: 'audio/wav' }));
-        setActiveTab('process');
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.error('Speech recognition error:', event.error);
+        setError('Speech recognition error: ' + event.error);
+        setIsRecording(false);
       };
 
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (err) {
-      console.error('Error accessing microphone:', err);
-      setError('Could not access microphone. Please check permissions.');
+      setRecognition(recognition);
+    } else {
+      setError('Speech recognition is not supported in this browser');
     }
-  };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      const tracks = mediaRecorderRef.current.stream.getTracks();
-      tracks.forEach(track => track.stop());
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
-      setError('');
+    return () => {
+      if (recognition) {
+        recognition.stop();
+      }
+    };
+  }, []);
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
       setActiveTab('process');
     }
   };
 
-  const processAudio = async (audioBlob: Blob) => {
+  const startRecording = async () => {
+    try {
+      if (recognition) {
+        recognition.start();
+        setIsRecording(true);
+        setTranscript('');
+        setInterimTranscript('');
+        setError('');
+      }
+    } catch (err) {
+      console.error('Error starting recording:', err);
+      setError('Could not start recording. Please check permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (recognition) {
+      recognition.stop();
+      setIsRecording(false);
+      setInterimTranscript('');
+      // Move to process tab after stopping
+      setActiveTab('process');
+    }
+  };
+
+  const processAudio = async () => {
     setIsProcessing(true);
     setError('');
     
     try {
-      // Create form data with the audio file
-      const formData = new FormData();
-      formData.append('file', audioBlob);
-
-      // Get transcription
-      const transcribeRes = await fetch('/api/transcribe', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!transcribeRes.ok) {
-        const error = await transcribeRes.json();
-        throw new Error(error.error || 'Failed to transcribe audio');
-      }
-
-      const { transcript } = await transcribeRes.json();
-
-      // Generate notes from transcription
+      // Generate notes directly from the transcript
       const notesRes = await fetch('/api/lecture_notes', {
         method: 'POST',
         headers: {
@@ -170,10 +223,10 @@ export default function LecturePage() {
       setActiveTab('results');
     } catch (err) {
       console.error('Processing error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to process audio');
+      setError(err instanceof Error ? err.message : 'Failed to process transcript');
       toast({
         title: "Error",
-        description: err instanceof Error ? err.message : 'Failed to process audio',
+        description: err instanceof Error ? err.message : 'Failed to process transcript',
         variant: "destructive",
       });
     } finally {
@@ -290,7 +343,7 @@ export default function LecturePage() {
               <CardHeader>
                 <CardTitle>Process Recording</CardTitle>
                 <CardDescription>
-                  Choose note type and generate transcript and notes
+                  Generate notes from your transcript
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -315,11 +368,11 @@ export default function LecturePage() {
                     </Select>
                   </div>
                   <Button
-                    onClick={() => processAudio(file as Blob)}
-                    disabled={!file || isLoading}
+                    onClick={processAudio}
+                    disabled={!transcript || isProcessing}
                     className="w-full"
                   >
-                    {isLoading ? (
+                    {isProcessing ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Processing
@@ -327,7 +380,7 @@ export default function LecturePage() {
                     ) : (
                       <>
                         <Brain className="mr-2 h-4 w-4" />
-                        Start Processing
+                        Generate Notes
                       </>
                     )}
                   </Button>

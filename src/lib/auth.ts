@@ -6,6 +6,8 @@ import bcrypt from "bcryptjs"
 import CredentialsProvider from "next-auth/providers/credentials"
 import { JWT } from "next-auth/jwt"
 import { Session } from "next-auth"
+import jwt from "jsonwebtoken"
+import { getServerSession } from "next-auth/next"
 
 // Define the structure of our JWT token
 interface CustomJWT extends JWT {
@@ -97,3 +99,17 @@ export const authOptions: NextAuthOptions = {
   },
   secret: process.env.NEXTAUTH_SECRET
 }
+
+export const signJWT = async (payload: any) => {
+  const token = jwt.sign(payload, process.env.JWT_SECRET!, {
+    expiresIn: '1d'
+  });
+  return token;
+};
+
+export const getSession = async (req: Request) => {
+  // Your session logic here
+  // This should match how you're handling sessions in your app
+  const session = await getServerSession(authOptions);
+  return session;
+};

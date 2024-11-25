@@ -1,22 +1,16 @@
 import { NextResponse } from 'next/server';
-import { getProcessingStatus, setupVectorSearch, updateProcessingStatus, insertEmbedding } from '@/lib/vectorDb';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import fs from 'fs/promises';
-import path from 'path';
-import pdfParse from 'pdf-parse';
+import { createWorker } from 'tesseract.js';
+import * as mammoth from 'mammoth';
 import { FileService } from '@/lib/fileService';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
+// Change runtime to nodejs since we need file system access
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-// Helper function to generate embeddings
-async function generateEmbedding(text: string) {
-  const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
-  const result = await embeddingModel.embedContent(text);
-  return result.embedding.values;
-}
 
 // Helper function to split text into sections
 function splitIntoSections(text: string, maxLength: number = 1000): string[] {
@@ -46,35 +40,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
     }
 
-    // Clean up the file path
-    const normalizedPath = documentId.replace(/%20/g, ' ').replace(/\+/g, ' ');
-    const cleanPath = normalizedPath.startsWith('/uploads/') 
-      ? normalizedPath.slice(1) 
-      : normalizedPath.startsWith('uploads/') 
-        ? normalizedPath 
-        : `uploads/${normalizedPath}`;
-
-    const filePath = path.join(process.cwd(), 'public', cleanPath);
-    console.log('Looking for file at:', filePath);
+    // Use pdfjs-dist for PDF parsing
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
     try {
-      // Check if file exists
-      await fs.access(filePath);
-      console.log('File found at:', filePath);
-    } catch (error) {
-      console.error('File not found at path:', filePath);
-      return NextResponse.json({ 
-        error: 'File not found',
-        details: filePath,
-        status: 'error'
-      }, { status: 404 });
-    }
-
-    try {
-      // Read and parse PDF
-      const dataBuffer = await fs.readFile(filePath);
-      const pdfData = await pdfParse(dataBuffer);
-      const content = pdfData.text;
+      // Load and parse PDF using pdfjs-dist
+      const loadingTask = pdfjsLib.getDocument(documentId);
+      const pdf = await loadingTask.promise;
+      
+      let content = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        content += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+      }
 
       if (!content) {
         throw new Error('Failed to extract text from PDF');

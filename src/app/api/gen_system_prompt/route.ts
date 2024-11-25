@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    await setupVectorSearch();
+    await setupVectorSearch(documentId);
 
     const sections = await getDocumentSections(documentId);
     const systemPrompt = await generateSystemPrompt(sections);

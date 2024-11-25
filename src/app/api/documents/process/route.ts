@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getSession } from '@/lib/auth'
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { GoogleGenerativeAI, EnhancedGenerateContentResponse } from '@google/generative-ai'
 import { createWorker } from 'tesseract.js'
 import * as mammoth from 'mammoth'
@@ -55,7 +56,7 @@ async function processAudio(buffer: Buffer, mimeType: string): Promise<string> {
 
 export async function POST(req: Request) {
   try {
-    const session = await getSession()
+    const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json(
         { error: 'Not authenticated' },

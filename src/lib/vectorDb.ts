@@ -361,3 +361,15 @@ export async function getContentForPages(documentId: string, startPage: number, 
     return null;
   }
 }
+
+export const getDocumentSections = async (documentId: string) => {
+  // Your implementation
+};
+
+export const storeSystemPrompt = async (documentId: string, prompt: string) => {
+  // Your implementation
+};
+
+export const wordSearch = async (query: string, limit: number, documentId: string) => {
+  // Your implementation
+};
