@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getSignedFileUrl } from '@/lib/s3';
+import { connectToDatabase } from '@/lib/mongodb'
 
 export async function GET(req: Request) {
   try {
@@ -11,14 +11,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const files = await prisma.file.findMany({
-      where: {
-        userId: session.user.id
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+    const files = await connectToDatabase().then(db => db.collection('files').find({ userId: session.user.id }).toArray());
 
     // Generate signed URLs for each file
     const filesWithUrls = await Promise.all(

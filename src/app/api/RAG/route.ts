@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { setupVectorSearch, insertEmbedding, updateProcessingStatus } from '@/lib/vectorDb';
-import { MongoClient } from 'mongodb';
+import { setupVectorSearch, insertEmbedding, updateProcessingStatus, getVectorStore } from '@/lib/vectorDb';
+import { connectToDatabase } from '@/lib/mongodb';
 
-const client = new MongoClient(process.env.MONGODB_URI!);
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 async function generateEmbedding(text: string) {
@@ -69,7 +68,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Document content and ID are required' }, { status: 400 });
     }
 
-    // Process sections with better error handling
+    // First, check if embeddings already exist
+    const existingEmbeddings = await getVectorStore(documentId);
+    if (existingEmbeddings && existingEmbeddings.length > 0) {
+      console.log(`Found existing embeddings for document ${documentId}`);
+      return NextResponse.json({ 
+        success: true,
+        message: 'Document already processed',
+        totalSections: existingEmbeddings.length,
+        processedSections: existingEmbeddings.length
+      });
+    }
+
+    // Get database connection
+    const { db } = await connectToDatabase();
+    
+    // Check processing status
+    const statusCollection = db.collection('processing_status');
+    const existingStatus = await statusCollection.findOne({ documentId });
+    
+    if (existingStatus?.status === 'processing') {
+      console.log(`Document ${documentId} is already being processed`);
+      return NextResponse.json({ 
+        success: true,
+        message: 'Document processing in progress',
+        totalSections: existingStatus.totalSections,
+        processedSections: existingStatus.processedSections
+      });
+    }
+
+    // Initialize vector search and processing status
+    await setupVectorSearch(documentId);
+    
+    // Split and process document
     const sections = splitIntoSections(documentContent);
     if (sections.length === 0) {
       throw new Error('No valid sections found in document');
@@ -78,7 +109,7 @@ export async function POST(request: Request) {
     console.log(`Processing ${sections.length} sections...`);
     await updateProcessingStatus(documentId, 'processing', sections.length, 0);
 
-    // Process sections sequentially to avoid overwhelming the API
+    // Process sections sequentially
     let processedCount = 0;
     for (const section of sections) {
       try {
@@ -94,6 +125,8 @@ export async function POST(request: Request) {
     }
 
     await updateProcessingStatus(documentId, 'completed', sections.length, sections.length);
+    console.log('Document processing completed successfully');
+
     return NextResponse.json({ 
       success: true,
       totalSections: sections.length,
@@ -103,10 +136,17 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Error in document processing:', error);
     if (currentDocumentId) {
-      await updateProcessingStatus(currentDocumentId, 'error', 0, 0, 
+      await updateProcessingStatus(
+        currentDocumentId, 
+        'error',
+        0,
+        0,
         error instanceof Error ? error.message : 'Unknown error'
       );
     }
-    return NextResponse.json({ error: 'Failed to process document' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

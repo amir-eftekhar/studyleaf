@@ -100,7 +100,7 @@ const PDFViewerPage: React.FC = () => {
 
 const PDFViewerContent: React.FC = () => {
   const searchParams = useSearchParams();
-  const [pdfUrl, setPdfUrl] = useState<string | null>(searchParams.get('url'));
+  const [pdfUrl, setPdfUrl] = useState<string | null>(searchParams?.get('url') ?? null);
   const [numPages, setNumPages] = useState<number>(0);
   const [isReading, setIsReading] = useState<boolean>(false);
   const [readingSpeed, setReadingSpeed] = useState<number>(1);
@@ -425,7 +425,7 @@ const PDFViewerContent: React.FC = () => {
 
   // Update PDF URL from Search Params
   useEffect(() => {
-    const url = searchParams.get('url');
+    const url = searchParams?.get('url') ?? null;
     if (url) {
       setPdfUrl(url);
     }

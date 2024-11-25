@@ -6,18 +6,18 @@ import { useRouter } from 'next/navigation'
 import axios from 'axios'
 
 const academicLevels = [
+  { id: 'elementary', label: 'Elementary School' },
+  { id: 'middle_school', label: 'Middle School' },
   { id: 'high_school', label: 'High School' },
-  { id: 'undergraduate', label: 'Undergraduate' },
-  { id: 'graduate', label: 'Graduate' },
-  { id: 'professional', label: 'Professional' },
-  { id: 'other', label: 'Other' }
+  { id: 'undergraduate', label: 'College' },
+  { id: 'graduate', label: 'Graduate School' }
 ]
 
 const learningStyles = [
-  { id: 'visual', label: 'Visual', icon: '👁️', description: 'Learn best through images, diagrams, and spatial understanding' },
-  { id: 'auditory', label: 'Auditory', icon: '👂', description: 'Prefer learning through listening and speaking' },
-  { id: 'reading', label: 'Reading/Writing', icon: '📚', description: 'Learn best through written words' },
-  { id: 'kinesthetic', label: 'Kinesthetic', icon: '🤸', description: 'Learn through hands-on experience and practice' }
+  { id: 'visual', label: 'Visual', icon: '👁️', description: 'I learn best with pictures, videos, and diagrams' },
+  { id: 'auditory', label: 'Auditory', icon: '👂', description: 'I learn best by listening and discussing' },
+  { id: 'reading', label: 'Reading/Writing', icon: '📚', description: 'I learn best by reading and taking notes' },
+  { id: 'kinesthetic', label: 'Hands-on', icon: '🤸', description: 'I learn best by doing and practicing' }
 ]
 
 const difficultyLevels = [
@@ -163,11 +163,11 @@ export default function PreferencesSetup() {
 
           {step === 3 && (
             <div className="space-y-6">
-              <h3 className="text-xl font-semibold mb-4">Study Goals & Schedule</h3>
+              <h3 className="text-xl font-semibold mb-4">Study Schedule</h3>
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Daily Study Time (minutes)
+                    How long do you want to study each day? (minutes)
                   </label>
                   <input
                     type="number"
@@ -181,10 +181,10 @@ export default function PreferencesSetup() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Preferred Study Times
+                    When do you usually study?
                   </label>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    {['Morning', 'Afternoon', 'Evening', 'Late Night'].map((time) => (
+                    {['Before School', 'After School', 'Evening', 'Weekends'].map((time) => (
                       <label key={time} className="flex items-center space-x-2">
                         <input
                           type="checkbox"
@@ -202,36 +202,27 @@ export default function PreferencesSetup() {
                     ))}
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Reminder Frequency
-                  </label>
-                  <select
-                    value={preferences.reminderFrequency}
-                    onChange={(e) => setPreferences({ ...preferences, reminderFrequency: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                  >
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                </div>
               </div>
             </div>
           )}
 
           {step === 4 && (
             <div className="space-y-6">
-              <h3 className="text-xl font-semibold mb-4">Focus Areas & Difficulty</h3>
+              <h3 className="text-xl font-semibold mb-4">Classes & Study Focus</h3>
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Preferred Subjects
+                    Current Classes
                   </label>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                     {[
-                      'Mathematics', 'Science', 'History', 'Literature',
-                      'Languages', 'Computer Science', 'Arts', 'Business'
+                      'AP Biology', 'AP Chemistry', 'AP Physics', 'AP Calculus AB', 'AP Calculus BC',
+                      'AP World History', 'AP Literature', 'AP Language', 'Honors English',
+                      'Algebra 1', 'Geometry', 'Algebra 2', 'Pre-Calculus',
+                      'Biology', 'Chemistry', 'Physics', 'Environmental Science',
+                      'World History', 'US History', 'Government', 'Economics',
+                      'Middle School Math', 'Middle School Science', 'Middle School History',
+                      'Elementary Math', 'Elementary Reading', 'Elementary Science'
                     ].map((subject) => (
                       <label key={subject} className="flex items-center space-x-2">
                         <input
@@ -249,31 +240,33 @@ export default function PreferencesSetup() {
                       </label>
                     ))}
                   </div>
+                  <div className="mt-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Other Classes
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Add your own classes (separate with commas)"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                      onChange={(e) => {
+                        const newSubjects = e.target.value.split(',').map(s => s.trim());
+                        setPreferences({ ...preferences, preferredSubjects: [...preferences.preferredSubjects, ...newSubjects] });
+                      }}
+                    />
+                  </div>
                 </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Difficulty Level
-                  </label>
-                  <select
-                    value={preferences.difficultyLevel}
-                    onChange={(e) => setPreferences({ ...preferences, difficultyLevel: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                  >
-                    {difficultyLevels.map((level) => (
-                      <option key={level.id} value={level.id}>
-                        {level.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Focus Areas
+                    What do you need help with?
                   </label>
                   <div className="space-y-2">
                     {[
-                      'Exam Preparation', 'Homework Help', 'Concept Understanding',
-                      'Problem Solving', 'Memory Improvement', 'Speed Learning'
+                      'Homework Help', 'Test Preparation', 'AP Exam Prep',
+                      'Understanding Difficult Topics', 'Study Skills',
+                      'Note-Taking', 'Time Management', 'Essay Writing',
+                      'Math Problem Solving', 'Science Lab Reports',
+                      'Research Papers', 'Class Projects'
                     ].map((area) => (
                       <label key={area} className="flex items-center space-x-2">
                         <input

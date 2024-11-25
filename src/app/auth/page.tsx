@@ -17,7 +17,7 @@ const LoginSignup = () => {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    const auth = searchParams.get('auth');
+    const auth = searchParams?.get('auth');
     setIsLogin(auth !== 'signup');
   }, [searchParams]);
 
@@ -64,7 +64,7 @@ const LoginSignup = () => {
         if (result?.error) {
           setError(result.error);
         } else {
-          const callbackUrl = searchParams.get('callbackUrl') || '/home';
+          const callbackUrl = searchParams?.get('callbackUrl') || '/home';
           router.push(callbackUrl);
           router.refresh();
         }
